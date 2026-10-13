@@ -1,0 +1,14 @@
+{
+  "thresholdLow" : -50.0,
+  "thresholdMid" : -40.0,
+  "thresholdHigh" : -28.0,
+  "smoothing" : 0.5,
+  "bufferFrames" : 1024,
+  "sampleRate" : 44100,
+  "modelPath" : "assets/models/vosk-model-small-es-0.42",
+  "activeAvatar" : "assets/avatars/avatar1.png",
+  "backgroundColor" : "#00FF00",
+  "visemeImages" : {
+    "NEUTRAL" : "C:\\Users\\jesga\\OneDrive\\Documents\\chonkytuber\\p1.png"
+  }
+}
