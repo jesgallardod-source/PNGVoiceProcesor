@@ -35,6 +35,7 @@ import org.PNGV.audio.AudioCapture;
 import org.PNGV.audio.VolumeAnalyzer;
 import org.PNGV.config.AppConfig;
 import org.PNGV.config.ConfigLoader;
+import org.PNGV.logging.LetterLogger;
 import org.PNGV.phoneme.Viseme;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -79,7 +80,22 @@ public class PngVoiceApp extends javafx.application.Application {
 
     /** Visemes de "hablando" que se rotan aleatoriamente cuando hay volumen. */
     private static final Viseme[] TALKING = {
-            Viseme.AE, Viseme.CDGKNSXYZ, Viseme.BMP, Viseme.TH, Viseme.O, Viseme.FV};
+            Viseme.A, Viseme.E, Viseme.I, Viseme.O, Viseme.U,
+            Viseme.BMP, Viseme.FV, Viseme.L, Viseme.S};
+
+    // ---- Ritmo de los cambios de imagen (para que se sienta una "plática") ----
+    /**
+     * Duración (ms) que se mantiene la <b>primera</b> imagen al empezar a hablar
+     * y la <b>última</b> imagen antes de volver al silencio. Es el valor más
+     * alto: estas dos se ven "más lentas" (permanecen más tiempo).
+     */
+    private static final long FIRST_LAST_MS = 700;
+    /**
+     * Duración (ms) de las imágenes <b>intermedias</b> (entre la primera y la
+     * última). Es menor que {@link #FIRST_LAST_MS} pero mucho mayor que el
+     * cambio por frame (~16 ms), de modo que se aprecian sin "parpadear".
+     */
+    private static final long MIDDLE_MS = 350;
 
     /**
      * Visemes (grupos de letras) que se muestran como imágenes propias.
@@ -87,8 +103,8 @@ public class PngVoiceApp extends javafx.application.Application {
      * El orden importa: es el orden en el que aparecen en el menú "Imágenes".
      */
     private static final List<Viseme> IMAGE_VISEMES = List.of(
-            Viseme.NEUTRAL, Viseme.AE, Viseme.CDGKNSXYZ, Viseme.R,
-            Viseme.BMP, Viseme.TH, Viseme.O, Viseme.QW, Viseme.L, Viseme.FV);
+            Viseme.NEUTRAL, Viseme.A, Viseme.E, Viseme.I, Viseme.O, Viseme.U,
+            Viseme.BMP, Viseme.FV, Viseme.L, Viseme.S);
 
     /**
      * Paleta de fondos disponibles en el menú "Fondo".
@@ -115,6 +131,17 @@ public class PngVoiceApp extends javafx.application.Application {
     private AudioCapture capture;
     private Viseme lastViseme = Viseme.NEUTRAL;
     private Path configPath;
+    private final LetterLogger letterLogger = new LetterLogger();
+
+    // ---- Estado del ritmo de cambio de viseme (ver tick) ----
+    /** Viseme actualmente visible en pantalla. */
+    private Viseme currentVisible = Viseme.NEUTRAL;
+    /** true si el avatar está en modo "hablando" (viseme != NEUTRAL). */
+    private boolean isTalking = false;
+    /** true mientras la imagen visible es la primera de una "palabra" (se congela). */
+    private boolean isHoldingFirst = false;
+    /** Marca (ns, AnimationTimer) de cuándo se fijó la imagen visible actual. */
+    private long visibleImageStartNanos = 0L;
 
     // Nodos UI
     private Circle face;
@@ -306,7 +333,7 @@ public class PngVoiceApp extends javafx.application.Application {
             public void handle(long now) {
                 if (capture == null) return;
                 AudioCapture.VolumeState st = capture.getState();
-                tick(st.level(), st.normalized());
+                tick(st.level(), st.normalized(), now);
             }
         };
         timer.start();
@@ -321,23 +348,126 @@ public class PngVoiceApp extends javafx.application.Application {
         }
     }
 
-    /** Actualiza UI con el estado de volumen más reciente. */
-    private void tick(int level, double normalized) {
-        // Decide el viseme: silencio → NEUTRAL; hablando → uno aleatorio de TALKING
-        if (level == 0) {
-            lastViseme = Viseme.NEUTRAL;
+    /**
+     * Actualiza UI con el estado de volumen más reciente.
+     *
+     * <p>Ritmo tipo "plática":
+     * <ul>
+     *   <li>Al <b>empezar</b> a hablar se elige una <b>primera</b> imagen que
+     *       se mantiene durante {@link #FIRST_LAST_MS} (el valor más largo).</li>
+     *   <li>Mientras continúa el habla se rotan imágenes <b>intermedias</b> cada
+     *       {@link #MIDDLE_MS} (más lento que antes, pero menos que la primera/última).</li>
+     *   <li>La <b>última</b> imagen antes de volver al silencio también se
+     *       mantiene {@link #FIRST_LAST_MS}.</li>
+     *   <li>Al llegar a silencio se pasa a {@code NEUTRAL} inmediatamente.</li>
+     * </ul>
+     *
+     * @param now marca de tiempo del {@link AnimationTimer} (ns), para medir
+     *            cuánto lleva la imagen visible actual.
+     */
+    private void tick(int level, double normalized, long now) {
+        boolean talking = level != 0;
+        boolean wasTalking = isTalking;
+        boolean firstFrame = !wasTalking && talking;   // borde silencio → habla
+        boolean lastFrame  = wasTalking && !talking;   // borde habla → silencio
+
+        if (firstFrame) {
+            // Empieza la "palabra": congelamos la primera imagen por FIRST_LAST_MS.
+            currentVisible = pickTalkingViseme(level);
+            isTalking = true;
+            isHoldingFirst = true;
+            visibleImageStartNanos = now;
+        } else if (talking) {
+            isTalking = true;
+            if (isHoldingFirst) {
+                // La primera imagen se mantiene; cuando termina su tiempo pasa
+                // a ritmo normal (MIDDLE_MS) y se rota.
+                if (elapsedMs(now, visibleImageStartNanos) >= FIRST_LAST_MS) {
+                    isHoldingFirst = false;
+                    currentVisible = pickDifferentTalkingViseme(level, currentVisible);
+                    visibleImageStartNanos = now;
+                }
+            } else {
+                // Ritmo normal: rotamos cada MIDDLE_MS, sin repetir la misma imagen.
+                if (elapsedMs(now, visibleImageStartNanos) >= MIDDLE_MS) {
+                    currentVisible = pickDifferentTalkingViseme(level, currentVisible);
+                    visibleImageStartNanos = now;
+                }
+            }
+        } else if (lastFrame) {
+            // Acaba de llegar el silencio: la última imagen hablada se muestra
+            // FIRST_LAST_MS más (ya está en pantalla) y luego NEUTRAL.
+            isTalking = false;
+            isHoldingFirst = false;
+            // currentVisible se mantiene; se volverá a aplicar al terminar el
+            // "hold" final (ver rama de silencio abajo).
         } else {
-            int idx = Math.min(TALKING.length - 1, random.nextInt(1 + level));
-            lastViseme = TALKING[idx];
+            // Silencio continuo.
+            isTalking = false;
+            isHoldingFirst = false;
         }
-        applyViseme(lastViseme);
+
+        // ---- Decisión de qué imagen mostrar en este frame ----
+        Viseme toShow;
+        if (isTalking) {
+            toShow = currentVisible;
+        } else {
+            // Silencio: la "última" imagen hablada sigue visible durante un
+            // hold final (FIRST_LAST_MS) antes de pasar a NEUTRAL.
+            long held = elapsedMs(now, visibleImageStartNanos);
+            if (lastFrame && held < FIRST_LAST_MS) {
+                toShow = currentVisible;   // la última imagen hablada
+            } else {
+                toShow = Viseme.NEUTRAL;
+                if (lastFrame) {
+                    // Acaba de terminar el hold final: reiniciamos el reloj
+                    // para que la próxima "palabra" empiece con su primera imagen.
+                    visibleImageStartNanos = now;
+                }
+            }
+        }
+
+        // Solo redibujamos si cambió la imagen visible (evita trabajo inútil).
+        if (toShow != currentVisible) {
+            currentVisible = toShow;
+        }
+        applyViseme(currentVisible);
         volumeBar.setProgress(normalized);
-        visemeLabel.setText("Viseme: " + lastViseme);
+        visemeLabel.setText("Viseme: " + currentVisible);
+    }
+
+    /** Elige un viseme de "hablando" aleatorio según el nivel de volumen. */
+    private Viseme pickTalkingViseme(int level) {
+        int idx = Math.min(TALKING.length - 1, random.nextInt(1 + level));
+        return TALKING[idx];
+    }
+
+    /** Elige un viseme de "hablando" distinto al que ya está visible (para no repetir). */
+    private Viseme pickDifferentTalkingViseme(int level, Viseme avoid) {
+        int idx = Math.min(TALKING.length - 1, random.nextInt(1 + level));
+        Viseme v = TALKING[idx];
+        if (v == avoid) {
+            // Si por azar repite, fuerza otro distinto (solo si hay más de uno).
+            if (TALKING.length > 1) {
+                do {
+                    v = TALKING[random.nextInt(TALKING.length)];
+                } while (v == avoid);
+            }
+        }
+        return v;
+    }
+
+    /** Milisegundos transcurridos desde una marca de tiempo del AnimationTimer. */
+    private static long elapsedMs(long now, long start) {
+        if (start <= 0) return Long.MAX_VALUE;
+        return (now - start) / 1_000_000L;
     }
 
     /** Cambia la forma de la boca según el viseme. */
     private void applyViseme(Viseme v) {
         lastShownViseme = v;
+        // Registrar en el logger de letras (usa System.nanoTime como referencia)
+        letterLogger.record(v, System.nanoTime());
         if (rightLetterLabel != null) {
             rightLetterLabel.setText("Letra actual: " + displayName(v));
         }
@@ -360,17 +490,17 @@ public class PngVoiceApp extends javafx.application.Application {
 
         double rx, ry;
         switch (v) {
-            case NEUTRAL   -> { rx = 18; ry = 3; }
-            case AE        -> { rx = 22; ry = 18; }
-            case CDGKNSXYZ -> { rx = 6;  ry = 6; }
-            case R         -> { rx = 10; ry = 10; }
-            case BMP       -> { rx = 20; ry = 1; }
-            case TH        -> { rx = 14; ry = 8; }
-            case O         -> { rx = 14; ry = 14; }
-            case QW        -> { rx = 12; ry = 12; }
-            case L         -> { rx = 14; ry = 8; }
-            case FV        -> { rx = 14; ry = 4; }
-            default        -> { rx = 18; ry = 3; }
+            case NEUTRAL -> { rx = 18; ry = 3; }   // reposo, casi cerrada
+            case A       -> { rx = 22; ry = 18; }  // muy abierta
+            case E       -> { rx = 22; ry = 10; }  // media, extendida
+            case I       -> { rx = 18; ry = 5; }   // cerrada, sonrisa
+            case O       -> { rx = 14; ry = 14; }  // redondeada media
+            case U       -> { rx = 8;  ry = 12; }  // muy redondeada
+            case BMP     -> { rx = 20; ry = 1; }   // labios cerrados
+            case FV      -> { rx = 14; ry = 4; }   // diente sobre labio
+            case L       -> { rx = 14; ry = 8; }   // punta de lengua
+            case S       -> { rx = 6;  ry = 6; }   // boca estrecha
+            default      -> { rx = 18; ry = 3; }
         }
         mouth.setCenterX(120);
         mouth.setCenterY(150);
@@ -404,6 +534,7 @@ public class PngVoiceApp extends javafx.application.Application {
             AudioCapture cap = new AudioCapture(config, analyzer);
             cap.start();
             this.capture = cap;
+            letterLogger.reset();
             statusLabel.setText("Micrófono: ON");
             toggleButton.setText("Detener micrófono");
             LOG.info("Micrófono iniciado");
@@ -416,6 +547,7 @@ public class PngVoiceApp extends javafx.application.Application {
 
     private void stopMic() {
         if (capture != null) {
+            letterLogger.stop();
             capture.close();
             capture = null;
         }
@@ -509,17 +641,17 @@ public class PngVoiceApp extends javafx.application.Application {
     /** Nombre legible de un viseme (grupo de letras) para mostrarlo en el menú. */
     private static String displayName(Viseme v) {
         return switch (v) {
-            case NEUTRAL   -> "silencio";
-            case AE        -> "a/e";
-            case CDGKNSXYZ -> "c/d/g/k/n/s/x/y/z";
-            case R         -> "r";
-            case BMP       -> "b/m/p";
-            case TH        -> "t/h";
-            case O         -> "o";
-            case QW        -> "q/w";
-            case L         -> "l";
-            case FV        -> "f/v";
-            default        -> v.name();
+            case NEUTRAL -> "silencio";
+            case A       -> "a";
+            case E       -> "e";
+            case I       -> "i";
+            case O       -> "o";
+            case U       -> "u";
+            case BMP     -> "b/m/p";
+            case FV      -> "f/v";
+            case L       -> "l/r";
+            case S       -> "s/c/d/g/k/n/t/x/y/z/h/q/w";
+            default      -> v.name();
         };
     }
 

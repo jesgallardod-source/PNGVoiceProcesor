@@ -4,73 +4,79 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Visemas (grupos de referencia) que el avatar puede mostrar.
+ * Visemas (formas de boca) que el avatar puede mostrar.
  *
- * <p>Cada viseme agrupa un <b>conjunto de letras</b> que comparten la <b>misma
- * imagen de referencia</b>. Es decir, todas las letras de un grupo se renderizan
- * con la misma imagen:
+ * <p>Esta versión usa la estructura <b>ideal para 2D: 10 imágenes</b>. Cada
+ * viseme es una forma de boca distinta y tiene su propia imagen de referencia.
+ *
+ * <p>La idea es separar las <b>5 vocales</b> (el movimiento de boca más
+ * importante) y añadir las <b>4 grupos de consonantes</b> que más cambian la
+ * forma de la boca:
  *
  * <ul>
- *   <li>{@link #AE}        → A, E</li>
- *   <li>{@link #CDGKNSXYZ} → C, D, G, K, N, S, X, Y, Z</li>
- *   <li>{@link #R}         → R</li>
- *   <li>{@link #BMP}       → B, M, P</li>
- *   <li>{@link #TH}        → T, H</li>
- *   <li>{@link #O}         → O</li>
- *   <li>{@link #QW}        → Q, W</li>
- *   <li>{@link #L}         → L</li>
- *   <li>{@link #FV}        → F, V</li>
+ *   <li>{@link #NEUTRAL} → boca cerrada, reposo (silencio)</li>
+ *   <li>{@link #A}       → boca abierta amplia            (a, á)</li>
+ *   <li>{@link #E}       → boca media, labios extendidos  (e, é)</li>
+ *   <li>{@link #I}       → boca cerrada, sonrisa          (i, í)</li>
+ *   <li>{@link #O}       → boca redondeada media          (o, ó)</li>
+ *   <li>{@link #U}       → boca muy redondeada            (u, ú)</li>
+ *   <li>{@link #BMP}     → labios cerrados                (b, m, p)</li>
+ *   <li>{@link #FV}      → diente sobre labio inferior    (f, v)</li>
+ *   <li>{@link #L}       → punta de lengua                (l, r)</li>
+ *   <li>{@link #S}       → boca estrecha / intermedia     (s, c, d, g, k, n, t, x, y, z, h, q, w)</li>
  * </ul>
  *
- * <p><b>Nota sobre la letra T:</b> la letra T aparece en dos grupos
- * ({@code C,D,G,K,N,S,T,X,Y,Z} y {@code T,H}). Se resuelve dando prioridad al
- * grupo {@link #TH} (el último definido). Si se desea lo contrario, basta con
- * reordenar las llamadas a {@link #assign} en {@link #buildLetterMap()}.
+ * <p><b>Nota sobre consonantes agrupadas:</b> en 2D las consonantes del grupo
+ * {@code S} comparten una posición de boca "intermedia" que funciona para todas;
+ * separarlas no aporta movimiento visible. Lo que sí se separa son las vocales
+ * (máximo movimiento) y los 4 grupos labiales/linguales que se distinguen a
+ * simple vista (BMP, FV, L, S).
  */
 public enum Viseme {
     /** Boca cerrada / neutra. Siempre disponible (silencio). */
     NEUTRAL,
-    /** A, E */
-    AE,
-    /** C, D, G, K, N, S, X, Y, Z */
-    CDGKNSXYZ,
-    /** R */
-    R,
-    /** B, M, P */
-    BMP,
-    /** T, H */
-    TH,
-    /** O */
+    /** Boca abierta amplia. Vocal A. */
+    A,
+    /** Boca media, labios extendidos. Vocal E. */
+    E,
+    /** Boca cerrada, sonrisa. Vocal I. */
+    I,
+    /** Boca redondeada media. Vocal O. */
     O,
-    /** Q, W */
-    QW,
-    /** L */
+    /** Boca muy redondeada. Vocal U. */
+    U,
+    /** Labios cerrados. B, M, P. */
+    BMP,
+    /** Diente superior sobre labio inferior. F, V. */
+    FV,
+    /** Punta de lengua visible. L, R. */
     L,
-    /** F, V */
-    FV;
+    /** Boca estrecha / intermedia. S, C, D, G, K, N, T, X, Y, Z, H, Q, W. */
+    S;
 
-    /** Mapa letra (minúscula) → viseme/grupo al que pertenece. */
+    /** Mapa letra (minúscula) → viseme al que pertenece. */
     private static final Map<Character, Viseme> LETTER_TO_VISEME = buildLetterMap();
 
     private Viseme() {
     }
 
     /**
-     * Construye el mapa letra → viseme a partir de los grupos definidos por el
-     * usuario. Los grupos se asignan en orden; si una letra pertenece a varios
-     * grupos, <b>gana el último</b> (por eso T → TH).
+     * Construye el mapa letra → viseme. Cada letra pertenece a un único grupo,
+     * así que no hay sobrescrituras ni prioridades: la asignación es directa.
      */
     private static Map<Character, Viseme> buildLetterMap() {
         Map<Character, Viseme> map = new HashMap<>();
-        assign(map, AE, "AE");
-        assign(map, CDGKNSXYZ, "CDGKNSXYZT"); // incluye T (será sobrescrito por TH)
-        assign(map, R, "R");
-        assign(map, BMP, "BMP");
-        assign(map, TH, "TH");                 // T → TH (prioridad)
-        assign(map, O, "O");
-        assign(map, QW, "QW");
-        assign(map, L, "L");
-        assign(map, FV, "FV");
+        // Vocales (cada una con su propia forma de boca)
+        assign(map, A, "aá");
+        assign(map, E, "eé");
+        assign(map, I, "ií");
+        assign(map, O, "oó");
+        assign(map, U, "uú");
+        // Grupos de consonantes
+        assign(map, BMP, "bmp");
+        assign(map, FV, "fv");
+        assign(map, L, "lr");
+        assign(map, S, "scdgkntxyzhqw");
         return map;
     }
 
@@ -83,7 +89,7 @@ public enum Viseme {
     }
 
     /**
-     * Devuelve el viseme (grupo de referencia) correspondiente a una letra.
+     * Devuelve el viseme correspondiente a una letra.
      *
      * @param letter letra arbitraria (mayúscula o minúscula)
      * @return viseme del grupo, o {@link #NEUTRAL} si la letra no está asignada

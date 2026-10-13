@@ -4,31 +4,89 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Segmenta palabras del español en sílabas usando reglas simples de
- * acentuación. No es un segmentador lingüístico perfecto, pero es suficiente
- * para extraer la vocable (vocal) dominante de cada sílaba y mapearla a un
- * viseme.
+ * Decide el viseme dominante de una palabra.
  *
- * <p>Reglas simplificadas aplicadas:
- * <ul>
- *   <li>Diptongos (V+C+V) se mantienen juntos.</li>
- *   <li>Hiatos (vocales fuertes + débiles) se separan.</li>
- *   <li>Consonantes al inicio de sílaba se agrupan según las reglas
- *       (sonoras → sílaba anterior; sordas → sílaba posterior).</li>
- * </ul>
+ * <p>En la nueva estructura de <b>10 visemes</b> cada vocal (A, E, I, O, U)
+ * tiene su propia forma de boca. Para elegir cuál se muestra se usa la heurística
+ * de <b>apertura</b>: la <b>vocal más abierta</b> presente en la palabra domina,
+ * porque es la que más mueve la boca y la que más se distingue a simple vista.
+ *
+ * <p>Orden de apertura (de más abierta a menos):
+ * <pre>
+ *   A  &gt;  O / E  &gt;  U / I
+ * </pre>
+ *
+ * <p>Si la palabra no contiene ninguna vocal, se devuelve {@link Viseme#NEUTRAL}.
+ *
+ * <p>El método {@link #split(String)} conserva el antiguo segmentador silábico
+ * (por compatibilidad), aunque {@link #dominantViseme(String)} ya no lo necesita.
  */
 public final class SyllableSplitter {
-
-    private static final String STRONG_VOWELS = "aeiouáéíóú";
-    private static final String WEAK_VOWELS = "iú";
 
     private SyllableSplitter() {
     }
 
     /**
-     * Divide una palabra en sílabas.
+     * Extrae el viseme dominante de una palabra.
      *
-     * @param word palabra en minúsculas (sin tildes para el análisis, aunque se conservan)
+     * <p>Heurística: recorre la palabra y elige el viseme de la <b>vocal más
+     * abierta</b> encontrada (A &gt; O/E &gt; U/I). Las consonantes no cuentan,
+     * porque el movimiento visible de la boca al hablar lo marcan las vocales.
+     *
+     * @param word palabra arbitraria (p. ej. "hola", "programación")
+     * @return viseme a mostrar, o {@link Viseme#NEUTRAL} si no hay vocales
+     */
+    public static Viseme dominantViseme(String word) {
+        if (word == null || word.isEmpty()) {
+            return Viseme.NEUTRAL;
+        }
+        Viseme best = Viseme.NEUTRAL;
+        int bestOpenness = -1;
+
+        for (int i = 0; i < word.length(); i++) {
+            char c = Character.toLowerCase(word.charAt(i));
+            if (!isVowel(c)) {
+                continue;
+            }
+            Viseme v = Viseme.fromLetter(c);
+            int openness = opennessOf(c);
+            if (openness > bestOpenness) {
+                bestOpenness = openness;
+                best = v;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * Grado de apertura de una vocal (mayor = más abierta).
+     * <p>A es la más abierta; O y E son medias; U e I son cerradas.
+     */
+    private static int opennessOf(char c) {
+        return switch (c) {
+            case 'a', 'á' -> 5;
+            case 'o', 'ó', 'e', 'é' -> 4;
+            case 'u', 'ú', 'i', 'í' -> 3;
+            default -> 0;
+        };
+    }
+
+    private static boolean isVowel(char c) {
+        return "aeiouáéíóú".indexOf(c) >= 0;
+    }
+
+    // ==================================================================
+    // Segmentador silábico (compatibilidad)
+    //
+    // Se conserva por si algún código externo lo usa. La heurística de
+    // apertura de dominantViseme() ya no depende de él.
+    // ==================================================================
+
+    /**
+     * Divide una palabra en sílabas usando reglas simplificadas de acentuación
+     * del español. No es un segmentador lingüístico perfecto.
+     *
+     * @param word palabra (se normaliza a minúsculas)
      * @return lista de sílabas (nunca null, puede estar vacía)
      */
     public static List<String> split(String word) {
@@ -45,42 +103,34 @@ public final class SyllableSplitter {
             char c = w.charAt(i);
 
             if (isVowel(c)) {
-                // ¿Diéresis o vocal débil?
                 char next = (i + 1 < n) ? w.charAt(i + 1) : 0;
                 boolean isDiphthong = isVowel(c) && isVowel(next)
                         && (isWeak(c) || isWeak(next));
 
-                if (!current.isEmpty() && isSyllableBreak(current, c, next)) {
+                if (!current.isEmpty() && isSyllableBreak(current, c)) {
                     result.add(current.toString());
                     current.setLength(0);
                 }
 
                 current.append(c);
 
-                // Si es diptongo, agrega también la siguiente vocal
                 if (isDiphthong) {
                     current.append(next);
                     i++;
                 }
             } else {
-                // Consonante: decide si se une a la sílaba anterior o inicia una nueva.
                 if (current.isEmpty()) {
-                    // Empieza la palabra: agrupa consonantes iniciales.
                     current.append(c);
-                    // Consonantes que pueden agruparse (p. ej. "br", "pl", "str").
                     while (i + 1 < n && isConsonant(w.charAt(i + 1))
                             && canCluster(c, w.charAt(i + 1))) {
                         i++;
                         current.append(w.charAt(i));
                     }
                 } else if (isVowel(current.charAt(current.length() - 1))) {
-                    // La sílaba actual termina en vocal → la consonante inicia nueva sílaba.
                     result.add(current.toString());
                     current.setLength(0);
                     current.append(c);
                 } else {
-                    // La sílaba actual termina en consonante → agrega la consonante
-                    // (clúster final, p. e. "nd", "nt").
                     current.append(c);
                 }
             }
@@ -92,47 +142,9 @@ public final class SyllableSplitter {
         return result;
     }
 
-    /**
-     * Extrae el viseme dominante de una palabra.
-     *
-     * <p>Heurística simple: devuelve el viseme de la <b>última vocal fuerte</b>
-     * (a, e, o) encontrada en la palabra. Si no hay ninguna, usa la primera
-     * vocal débil (i, u). Si tampoco, {@link Viseme#NEUTRAL}.
-     *
-     * @param word palabra arbitraria
-     * @return viseme a mostrar, o {@link Viseme#NEUTRAL} si no aplica
-     */
-    public static Viseme dominantViseme(String word) {
-        if (word == null || word.isEmpty()) {
-            return Viseme.NEUTRAL;
-        }
-        String w = word.toLowerCase();
-        Viseme lastStrong = Viseme.NEUTRAL;
-        Viseme firstWeak = Viseme.NEUTRAL;
-
-        for (int i = 0; i < w.length(); i++) {
-            char c = w.charAt(i);
-            Viseme v = Viseme.fromPhoneme(String.valueOf(c));
-            if (v == Viseme.NEUTRAL) {
-                continue;
-            }
-            if (isStrongVowel(c)) {
-                lastStrong = v; // la última vocal fuerte gana
-            } else if (firstWeak == Viseme.NEUTRAL) {
-                firstWeak = v;  // recuerda la primera débil como respaldo
-            }
-        }
-
-        return lastStrong != Viseme.NEUTRAL ? lastStrong : firstWeak;
-    }
-
     // ------------------------------------------------------------------
-    // Helpers
+    // Helpers del segmentador
     // ------------------------------------------------------------------
-
-    private static boolean isVowel(char c) {
-        return "aeiouáéíóú".indexOf(c) >= 0;
-    }
 
     private static boolean isWeak(char c) {
         return "iú".indexOf(c) >= 0;
@@ -146,12 +158,7 @@ public final class SyllableSplitter {
         return Character.isLetter(c) && !isVowel(c);
     }
 
-    /**
-     * Decide si hay que cortar la sílaba antes de {@code c}.
-     */
-    private static boolean isSyllableBreak(StringBuilder current, char c, char next) {
-        // Si la sílaba actual ya termina en vocal fuerte y la siguiente es
-        // vocal fuerte → hiato → corte.
+    private static boolean isSyllableBreak(StringBuilder current, char c) {
         char last = current.charAt(current.length() - 1);
         if (isStrongVowel(last) && isStrongVowel(c)) {
             return true;
@@ -159,15 +166,10 @@ public final class SyllableSplitter {
         return false;
     }
 
-    /**
-     * ¿Pueden agruparse las consonantes {@code a} + {@code b} al inicio de sílaba?
-     * Regla muy simplificada.
-     */
     private static boolean canCluster(char a, char b) {
         if (a == 's') {
-            return true; // "str", "spr", "scr"
+            return true;
         }
-        // Grupo sonoro + oclusiva (br, pr, bl, pl, dr, tr, gr, cr, fr).
         return "brbl".indexOf(a) >= 0 || "prpl".indexOf(a) >= 0
                 || "dr".indexOf(a) >= 0 || "trgrcrfr".indexOf(a) >= 0;
     }

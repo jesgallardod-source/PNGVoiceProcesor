@@ -87,8 +87,8 @@ public class AvatarManager {
                 path,
                 4, 10,
                 128, 128,
-                List.of("NEUTRAL", "AE", "CDGKNSXYZ", "R", "BMP",
-                        "TH", "O", "QW", "L", "FV"));
+                List.of("NEUTRAL", "A", "E", "I", "O",
+                        "U", "BMP", "FV", "L", "S"));
         register(avatar);
         LOG.info("Avatar cargado: {}", avatar);
     }
@@ -105,8 +105,8 @@ public class AvatarManager {
                 "(generated)",
                 4, 10,
                 128, 128,
-                List.of("NEUTRAL", "AE", "CDGKNSXYZ", "R", "BMP",
-                        "TH", "O", "QW", "L", "FV"));
+                List.of("NEUTRAL", "A", "E", "I", "O",
+                        "U", "BMP", "FV", "L", "S"));
         register(a);
         return a;
     }
