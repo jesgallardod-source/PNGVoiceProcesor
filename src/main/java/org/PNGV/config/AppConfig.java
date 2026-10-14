@@ -28,8 +28,15 @@ public class AppConfig {
 
     /** Muestra por buffer de captura (16-bit). 1024 es un buen valor. */
     private int bufferFrames = 1024;
-    /** Frecuencia de muestreo. */
-    private int sampleRate = 44100;
+    /**
+     * Frecuencia de muestreo. <b>Debe coincidir con la frecuencia con la que
+     * está entrenado el modelo de Vosk</b> (ver {@code conf/mfcc.conf} del
+     * modelo). Para el modelo "vosk-model-small-es-0.42" la frecuencia es
+     * <b>16000 Hz</b>. Usar otra frecuencia (p. ej. 44100 Hz) hace que Vosk
+     * reciba la señal acelerada y produzca texto aleatorio / fin de frase
+     * inmediato.
+     */
+    private int sampleRate = 16000;
 
     /** Ruta al modelo de Vosk (p. ej. assets/models/vosk-model-small-es-0.42). */
     private String modelPath = "assets/models/vosk-model-small-es-0.42";

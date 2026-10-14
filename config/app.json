@@ -4,7 +4,7 @@
   "thresholdHigh" : -28.0,
   "smoothing" : 0.5,
   "bufferFrames" : 1024,
-  "sampleRate" : 44100,
+  "sampleRate" : 16000,
   "modelPath" : "assets/models/vosk-model-small-es-0.42",
   "activeAvatar" : "assets/avatars/avatar1.png",
   "backgroundColor" : "#00FF00",

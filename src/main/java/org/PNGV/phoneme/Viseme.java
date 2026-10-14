@@ -57,9 +57,6 @@ public enum Viseme {
     /** Mapa letra (minúscula) → viseme al que pertenece. */
     private static final Map<Character, Viseme> LETTER_TO_VISEME = buildLetterMap();
 
-    private Viseme() {
-    }
-
     /**
      * Construye el mapa letra → viseme. Cada letra pertenece a un único grupo,
      * así que no hay sobrescrituras ni prioridades: la asignación es directa.
@@ -103,18 +100,26 @@ public enum Viseme {
     }
 
     /**
-     * Devuelve el viseme correspondiente a un fonema/letra dado como cadena.
+     * Devuelve el viseme de una palabra usando su <b>primera letra</b>.
      *
-     * <p>Se usa la primera letra de la cadena para el mapeo (compatible con las
-     * llamadas de {@code SyllableSplitter}, que pasa una letra a la vez).
+     * <p>La primera letra es el "ataque" de la sílaba: la forma de boca más
+     * reconocible. Se recorre la palabra hasta encontrar la primera letra
+     * (ignorando puntuación, espacios, etc.) y se mapea con
+     * {@link #fromLetter(char)}.
      *
-     * @param phoneme fonema en minúsculas (p. ej. "a", "m", "f")
-     * @return viseme del grupo, o {@link #NEUTRAL} si no se reconoce
+     * @param word palabra arbitraria (p. ej. "hola", "programación")
+     * @return viseme de la primera letra, o {@link #NEUTRAL} si no hay letras
      */
-    public static Viseme fromPhoneme(String phoneme) {
-        if (phoneme == null || phoneme.isBlank()) {
+    public static Viseme fromWord(String word) {
+        if (word == null) {
             return NEUTRAL;
         }
-        return fromLetter(phoneme.trim().charAt(0));
+        for (int i = 0; i < word.length(); i++) {
+            char c = word.charAt(i);
+            if (Character.isLetter(c)) {
+                return fromLetter(c);
+            }
+        }
+        return NEUTRAL;
     }
 }

@@ -29,6 +29,11 @@ public class AudioCapture implements AutoCloseable {
 
     private final AppConfig config;
     private final VolumeAnalyzer analyzer;
+    /**
+     * Procesador opcional de cada buffer PCM (p. ej. un reconocedor de
+     * fonemas). Si es {@code null}, solo se publica el volumen.
+     */
+    private final AudioFrameProcessor frameProcessor;
 
     private TargetDataLine line;
     private Thread thread;
@@ -39,8 +44,21 @@ public class AudioCapture implements AutoCloseable {
             new AtomicReference<>(VolumeState.SILENCE);
 
     public AudioCapture(AppConfig config, VolumeAnalyzer analyzer) {
+        this(config, analyzer, null);
+    }
+
+    /**
+     * Crea un captor con un procesador de buffers PCM adicional (reconocedor
+     * de fonemas).
+     *
+     * @param config         configuración de la app
+     * @param analyzer       analizador de volumen
+     * @param frameProcessor callback opcional por buffer PCM (puede ser null)
+     */
+    public AudioCapture(AppConfig config, VolumeAnalyzer analyzer, AudioFrameProcessor frameProcessor) {
         this.config = config;
         this.analyzer = analyzer;
+        this.frameProcessor = frameProcessor;
     }
 
     /** Inicia la captura de audio en un hilo separado. */
@@ -93,6 +111,16 @@ public class AudioCapture implements AutoCloseable {
             int level = analyzer.analyzeLevel(samples);
             double normalized = analyzer.getNormalizedLevel();
             stateRef.set(new VolumeState(level, normalized));
+
+            // Procesador opcional (p. ej. reconocedor de fonemas). Las
+            // excepciones se capturan para no tumbar el hilo de audio.
+            if (frameProcessor != null) {
+                try {
+                    frameProcessor.process(raw, n);
+                } catch (Exception e) {
+                    LOG.warn("AudioFrameProcessor falló: {}", e.getMessage(), e);
+                }
+            }
         }
     }
 
