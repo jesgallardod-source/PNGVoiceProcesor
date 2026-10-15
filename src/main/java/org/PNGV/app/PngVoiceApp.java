@@ -650,15 +650,26 @@ public class PngVoiceApp extends javafx.application.Application {
      * distrae: el objetivo es dar vida a las imágenes sin que se vean
      * "temblorosas" ni inestables.
      *
+     * <p><b>Excepción del grito:</b> cuando el avatar está en un episodio de
+     * grito activo ({@link #inScream}), la vibración se aplica <b>siempre</b>,
+     * incluso si el usuario desactivó el botón "Vibración" (que solo controla
+     * el agitamiento durante el habla normal). Así el grito se siente "fuerte"
+     * de forma consistente.
+     *
      * @param now marca de tiempo del {@link AnimationTimer} (ns)
      */
     private void updateImageWiggle(long now) {
         if (imageWiggleTranslate == null) {
             return;   // aún no se ha construido la UI (no debería ocurrir)
         }
-        // Si la vibración está desactivada, el avatar permanece quieto:
-        // amplitud a cero y transformaciones neutras (idempotente).
-        if (!vibrationEnabled) {
+        // Si la vibración está desactivada Y no hay un grito activo, el avatar
+        // permanece quieto: amplitud a cero y transformaciones neutras.
+        //
+        // Excepción: cuando el avatar está en un episodio de grito (inScream)
+        // la imagen debe <b>SIEMPRE</b> vibrar, sin depender del botón de
+        // vibración. Así el grito se siente "fuerte" aunque el usuario tenga
+        // la vibración normal apagada.
+        if (!vibrationEnabled && !inScream) {
             imageWiggleAmp = 0.0;
             if (imageWiggleTranslate.getX() != 0 || imageWiggleTranslate.getY() != 0
                     || imageWiggleRotate.getAngle() != 0) {
@@ -677,8 +688,10 @@ public class PngVoiceApp extends javafx.application.Application {
         }
         imageWiggleLastNow = now;
 
-        // Amplitud objetivo: 1.0 mientras habla, 0.0 en silencio.
-        double target = isTalking ? 1.0 : 0.0;
+        // Amplitud objetivo: 1.0 mientras habla O mientras hay un grito activo
+        // (el grito SIEMPRE vibra, incluso con el botón de vibración OFF);
+        // 0.0 en silencio.
+        double target = (isTalking || inScream) ? 1.0 : 0.0;
         if (target > imageWiggleAmp) {
             // Crece de forma suave (~0.3 s para llegar a pleno).
             imageWiggleAmp = Math.min(target, imageWiggleAmp + dt / 0.3);
