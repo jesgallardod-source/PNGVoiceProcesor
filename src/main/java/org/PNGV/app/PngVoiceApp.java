@@ -175,6 +175,9 @@ public class PngVoiceApp extends javafx.application.Application {
     private Label visemeLabel;
     private Button toggleButton;
     private Button togglePanelButton;   // muestra/oculta el panel lateral de letras
+    private Button vibrationButton;     // activa/desactiva la vibración del avatar
+    /** true si la vibración (agitamiento) del avatar está habilitada. */
+    private boolean vibrationEnabled = true;
     private Label rightLetterLabel;    // etiqueta del panel derecho con la letra actual
 
     // ---- Panel lateral (slider) de administración de imágenes por letra ----
@@ -290,9 +293,17 @@ public class PngVoiceApp extends javafx.application.Application {
                 "-fx-cursor: hand;");
         toggleButton.setOnAction(e -> toggleMic());
 
-        // ---- Fila de botones: iniciar/stop (+ mostrar/ocultar panel) ----
+        // ---- Botón de vibración (agitamiento del avatar al hablar) ----
+        // Inicializado según la configuración persistida.
+        vibrationEnabled = config.isVibrationEnabled();
+        vibrationButton = new Button("Vibración: ON");
+        vibrationButton.setStyle(panelButtonStyle(vibrationEnabled ? "#a6e3a1" : "#f38ba8"));
+        vibrationButton.setOnAction(e -> toggleVibration(configPath));
+
+        // ---- Fila de botones: iniciar/stop + vibración (+ mostrar/ocultar panel) ----
         HBox controls = new HBox(12,
-                toggleButton);
+                toggleButton,
+                vibrationButton);
         controls.setAlignment(Pos.CENTER);
         controls.setPadding(new Insets(8));
 
@@ -576,6 +587,18 @@ public class PngVoiceApp extends javafx.application.Application {
         if (imageWiggleTranslate == null) {
             return;   // aún no se ha construido la UI (no debería ocurrir)
         }
+        // Si la vibración está desactivada, el avatar permanece quieto:
+        // amplitud a cero y transformaciones neutras (idempotente).
+        if (!vibrationEnabled) {
+            imageWiggleAmp = 0.0;
+            if (imageWiggleTranslate.getX() != 0 || imageWiggleTranslate.getY() != 0
+                    || imageWiggleRotate.getAngle() != 0) {
+                imageWiggleTranslate.setX(0);
+                imageWiggleTranslate.setY(0);
+                imageWiggleRotate.setAngle(0);
+            }
+            return;
+        }
         // dt en segundos (protegido de un primer frame o saltos muy grandes).
         double dt;
         if (imageWiggleLastNow <= 0) {
@@ -652,6 +675,33 @@ public class PngVoiceApp extends javafx.application.Application {
         } else {
             stopMic();
         }
+    }
+
+    /**
+     * Alterna la <b>vibración</b> (agitamiento) del avatar mientras habla.
+     * Actualiza el texto/color del botón, aplica el efecto de inmediato y
+     * persiste el estado en la configuración.
+     *
+     * @param configPath ruta del archivo de configuración a actualizar
+     */
+    private void toggleVibration(Path configPath) {
+        vibrationEnabled = !vibrationEnabled;
+        vibrationButton.setText("Vibración: " + (vibrationEnabled ? "ON" : "OFF"));
+        vibrationButton.setStyle(panelButtonStyle(vibrationEnabled ? "#a6e3a1" : "#f38ba8"));
+        // Si se desactiva, el avatar deja de moverse de inmediato.
+        if (!vibrationEnabled) {
+            resetImageWiggle();
+        }
+        // Persiste la preferencia.
+        try {
+            ConfigLoader loader = new ConfigLoader();
+            AppConfig cfg = loader.load(configPath);
+            cfg.setVibrationEnabled(vibrationEnabled);
+            loader.save(configPath, cfg);
+        } catch (RuntimeException e) {
+            LOG.warn("No se pudo persistir el estado de la vibración", e);
+        }
+        LOG.info("Vibración del avatar: {}", vibrationEnabled ? "ON" : "OFF");
     }
 
     private void startMic() {

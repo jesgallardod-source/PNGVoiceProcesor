@@ -68,6 +68,8 @@ Sin internet, sin servidores. Todo local.
 │                  └── no?           → drawPlaceholder() (formas Canvas)     │
 │                                                                             │
 │  UI: ProgressBar (volumen), Label (viseme), Label (estado)                 │
+      Botones: Iniciar/Detener micrófono, Vibración (ON/OFF), Panel de letras│
+      (la vibración alterna el agitamiento del avatar; persiste en config)   │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -181,6 +183,7 @@ Archivo: `config/app.json` (creado automáticamente con defaults si no existe).
   "modelPath": "assets/models/vosk-model-small-es-0.42",
   "activeAvatar": "assets/avatars/avatar1.png",
   "backgroundColor": "#00FF00",
+  "vibrationEnabled": true,
   "visemeImages": {
     "A": "assets/visemes/A.png",
     "E": "assets/visemes/E.png",
@@ -201,6 +204,7 @@ Archivo: `config/app.json` (creado automáticamente con defaults si no existe).
 | `activeAvatar` | `assets/avatars/avatar1.png` | Ruta sprite sheet (no usado aún) |
 | `backgroundColor` | `#00FF00` | Fondo croma-key |
 | `visemeImages` | `{}` | Mapa viseme→ruta PNG (placeholder si vacío) |
+| `vibrationEnabled` | `true` | Vibración (agitamiento) del avatar al hablar: ON/OFF (botón en la UI) |
 
 ---
 

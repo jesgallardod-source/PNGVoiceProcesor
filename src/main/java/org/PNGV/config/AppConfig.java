@@ -48,6 +48,13 @@ public class AppConfig {
     private String backgroundColor = "#00FF00";
 
     /**
+     * Indica si el <b>agitamiento/vibración</b> del avatar mientras habla está
+     * activado. {@code true} (por defecto) = el avatar tiembla suavemente al
+     * hablar; {@code false} = el avatar permanece quieto.
+     */
+    private boolean vibrationEnabled = true;
+
+    /**
      * Imágenes propias del usuario, una por <b>viseme/letra</b>.
      *
      * <p>Clave = nombre del viseme (p. ej. "A", "E", "NEUTRAL") y valor =
@@ -83,6 +90,9 @@ public class AppConfig {
 
     public String getBackgroundColor() { return backgroundColor; }
     public void setBackgroundColor(String backgroundColor) { this.backgroundColor = backgroundColor; }
+
+    public boolean isVibrationEnabled() { return vibrationEnabled; }
+    public void setVibrationEnabled(boolean vibrationEnabled) { this.vibrationEnabled = vibrationEnabled; }
 
     public Map<String, String> getVisemeImages() {
         return visemeImages;
