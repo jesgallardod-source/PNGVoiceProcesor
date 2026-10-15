@@ -73,6 +73,16 @@ Sin internet, sin servidores. Todo local.
 
 **Latencia objetivo:** < 80 ms (buffer de 1024 frames a 16 kHz = ~64 ms).
 
+> **Nota importante (formato de salida de Vosk):** `Recognizer.getResult()` y
+> `Recognizer.getPartialResult()` **no devuelven texto plano, devuelven JSON**:
+> `{ "text" : "hola" }` (final) o `{ "partial" : "hola" }` (parcial).
+> `VoskRecognizer.acceptWaveForm()` parsea ese JSON con Jackson
+> (`VoskRecognizer.extractText(String)`) para extraer el campo `text`/`partial`
+> antes de mapear al viseme. **No** se puede usar la cadena JSON tal cual
+> (`Viseme.fromWord` no encuentra letras en `{...}` y devuelve siempre NEUTRAL).
+> `endOfUtterance == false` es **esperado** mientras no haya silencio: Vosk solo
+> devuelve `true` al detectar pausa.
+
 ---
 
 ## 4. Estructura de paquetes y responsabilidades
@@ -199,6 +209,7 @@ Archivo: `config/app.json` (creado automáticamente con defaults si no existe).
 | Decisión | Razón |
 |----------|-------|
 | **16 kHz, no 44.1 kHz** | Vosk `vosk-model-small-es-0.42` está entrenado a 16 kHz. Vosk **no hace re-muestreo interno**: a 44.1 kHz el modelo interpreta la señal acelerada y produce texto aleatorio. |
+| **Verificar `line.getFormat().getSampleRate()` tras `open()`** | `TargetDataLine.open(format)` puede "exitosamente" abrir la línea entregando otra frecuencia (SRC interna del SO en Windows/WASAPI) sin lanzar excepción. `AudioCapture.openLine()` lee la frecuencia real y construye el `SampleRateFilter` con ella, no con la pedida. Fallbacks probados: 32k → 48k → 44.1k → 8k (32k es el más cercano a 16k, mejor calidad de interpolación). |
 | **10 visemes (no 12+ columnas)** | En 2D, separar S/C/D/G/K/N/T/X/Y/Z/H/Q/W en formas de boca distintas no aporta movimiento visible. Agrupar en BMP/FV/L/S + 5 vocales + NEUTRAL es suficiente. |
 | **Primera letra de la última palabra** (VoskRecognizer) | Es el "ataque" de la sílaba, la forma de boca más reconocible. Simple y suficiente para v1. (El `SyllableSplitter.dominantViseme()` por apertura de vocal existe pero no se usa en el pipeline actual.) |
 | **Placeholder Canvas si no hay imagen** | Permite que la app funcione desde el primer `mvn javafx:run` sin que el usuario tenga que crear PNGs. Se ve color + forma de boca + texto. |
@@ -255,4 +266,4 @@ mvn clean
 | `SyllableSplitterTest` (12 tests) | DominantViseme por apertura, split por sílabas, edge cases |
 | `ConfigLoaderTest` (5 tests) | Save/load round-trip, defaults, custom values |
 | `AvatarRendererTest` (6 tests) | Placeholder rendering, estado, viseme→nombre |
-| `VoskRecognizerTest` (10 tests) | `visemeFromWord`, `lastWord`, `fromPhoneme` (sin binario Vosk) |
+| `VoskRecognizerTest` (9 tests) | `extractText`: parseo JSON→texto de Vosk (`text`/`partial`, vacíos, texto plano, JSON inválido) |

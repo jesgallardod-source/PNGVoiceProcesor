@@ -37,13 +37,6 @@ public class VolumeAnalyzer {
     }
 
     /**
-     * Devuelve el dBFS suavizado actual (útil para la barra de volumen en la UI).
-     */
-    public double getSmoothedDbfs() {
-        return smoothedDbfs;
-    }
-
-    /**
      * Normaliza el dBFS suavizado a 0..1 (para una barra de progreso).
      * -100 dBFS = 0.0, -20 dBFS = 1.0.
      */

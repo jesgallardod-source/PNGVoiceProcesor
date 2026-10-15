@@ -196,6 +196,16 @@ public class PngVoiceApp extends javafx.application.Application {
     private final Map<Viseme, Image> visemeImages = new HashMap<>(); // viseme -> imagen cargada
     private boolean usingImages = false;           // true si hay al menos una imagen asignada
 
+    // ---- Agitamiento ligero del avatar mientras habla ----
+    private javafx.scene.transform.Translate imageWiggleTranslate;
+    private javafx.scene.transform.Rotate      imageWiggleRotate;
+    /** Amplitud actual (0..1) del agitamiento: 1 = pleno, 0 = en reposo. */
+    private double imageWiggleAmp = 0.0;
+    /** Fase de la onda sinusoidal que produce el temblor. */
+    private double imageWigglePhase = 0.0;
+    /** Marca (ns) del último frame para calcular dt. */
+    private long   imageWiggleLastNow = -1L;
+
     // ---- Parpadeo periódico (independiente de silencio y letras) ----
     /** Imagen que se muestra brevemente cuando el avatar parpadea. */
     private Image blinkImage;
@@ -235,6 +245,18 @@ public class PngVoiceApp extends javafx.application.Application {
         imageLayer = new StackPane(imageHolder);
         imageLayer.setPrefSize(AVATAR_SIZE, AVATAR_SIZE);
         imageLayer.setMouseTransparent(true);
+
+        // Transformaciones de "agitamiento" ligero (pequeño temblor continuo
+        // que se aplica mientras el avatar cambia de letra / habla).
+        imageWiggleTranslate = new javafx.scene.transform.Translate(0, 0);
+        // La rotación se ancla en el <b>centro inferior</b> del avatar (no en
+        // el centro geométrico): así la <b>parte superior</b> (la "cabeza") se
+        // mece más hacia los lados, como un vaivén de cabeza, mientras la base
+        // queda casi fija. El desplazamiento (Translate) sigue siendo global.
+        imageWiggleRotate = new javafx.scene.transform.Rotate(0,
+                AVATAR_SIZE / 2, AVATAR_SIZE);
+        imageLayer.getTransforms().addAll(imageWiggleTranslate, imageWiggleRotate);
+
         avatar.getChildren().add(imageLayer);
         imageLayer.toFront();
 
@@ -334,6 +356,7 @@ public class PngVoiceApp extends javafx.application.Application {
                 if (capture == null) return;
                 AudioCapture.VolumeState st = capture.getState();
                 tick(st.level(), st.normalized(), now);
+                updateImageWiggle(now);
             }
         };
         timer.start();
@@ -532,6 +555,97 @@ public class PngVoiceApp extends javafx.application.Application {
         }
     }
 
+    /**
+     * Agitamiento ligero del avatar mientras el micrófono está activo y el
+     * avatar está cambiando de letra (hablando). Se modela como una amplitud
+     * {@code 0..1} que <b>crece</b> mientras habla y <b>decae</b>
+     * exponencialmente en silencio, multiplicando un temblor sinusoidal
+     * pequeño (±{@link #WIGGLE_MAX_PX} px y ±{@link #WIGGLE_MAX_DEG}°).
+     * El desplazamiento es global; la rotación se ancla en la <b>base</b> del
+     * avatar, de modo que la parte superior (la "cabeza") se mece más hacia
+     * los lados.
+     *
+     * <p>Es un movimiento "orgánico" (dos senos con fases distintas) para que
+     * no se note como un simple vaivén recto, y queda tan sutil que no
+     * distrae: el objetivo es dar vida a las imágenes sin que se vean
+     * "temblorosas" ni inestables.
+     *
+     * @param now marca de tiempo del {@link AnimationTimer} (ns)
+     */
+    private void updateImageWiggle(long now) {
+        if (imageWiggleTranslate == null) {
+            return;   // aún no se ha construido la UI (no debería ocurrir)
+        }
+        // dt en segundos (protegido de un primer frame o saltos muy grandes).
+        double dt;
+        if (imageWiggleLastNow <= 0) {
+            dt = 1.0 / 60.0;
+        } else {
+            dt = Math.min(0.1, (now - imageWiggleLastNow) / 1_000_000_000.0);
+        }
+        imageWiggleLastNow = now;
+
+        // Amplitud objetivo: 1.0 mientras habla, 0.0 en silencio.
+        double target = isTalking ? 1.0 : 0.0;
+        if (target > imageWiggleAmp) {
+            // Crece de forma suave (~0.3 s para llegar a pleno).
+            imageWiggleAmp = Math.min(target, imageWiggleAmp + dt / 0.3);
+        } else {
+            // Decae exponencialmente: ~0.5 s hasta casi 0.
+            imageWiggleAmp *= Math.pow(0.05, dt);   // base 0.05 en 1 s
+            if (imageWiggleAmp < 0.005) imageWiggleAmp = 0.0;
+        }
+
+        // Avanza la fase (≈ 4.0 Hz, un "temblor" algo más rápido y orgánico).
+        imageWigglePhase += dt * 2.0 * Math.PI * 4.0;
+
+        if (imageWiggleAmp <= 0.0) {
+            // En reposo absoluto: asegura offsets a cero (idempotente).
+            if (imageWiggleTranslate.getX() == 0 && imageWiggleTranslate.getY() == 0
+                    && imageWiggleRotate.getAngle() == 0) {
+                return;
+            }
+            imageWiggleTranslate.setX(0);
+            imageWiggleTranslate.setY(0);
+            imageWiggleRotate.setAngle(0);
+            return;
+        }
+
+        // Dos senos con fases distintas → el desplazamiento describe una
+        // pequeña "elipse" (movimiento menos predecible que un vaivén lineal).
+        double dx = Math.sin(imageWigglePhase)              * WIGGLE_MAX_PX * imageWiggleAmp;
+        double dy = Math.sin(imageWigglePhase * 1.37 + 1.1) * WIGGLE_MAX_PX * imageWiggleAmp;
+        double da = Math.sin(imageWigglePhase * 0.83 + 2.0) * WIGGLE_MAX_DEG * imageWiggleAmp;
+
+        imageWiggleTranslate.setX(dx);
+        imageWiggleTranslate.setY(dy);
+        imageWiggleRotate.setAngle(da);
+    }
+
+    /** Amplitud máxima (px) del desplazamiento del avatar en pleno "agitamiento". */
+    private static final double WIGGLE_MAX_PX  = 2.0;
+    /** Amplitud máxima (grados) de rotación del avatar en pleno "agitamiento". */
+    private static final double WIGGLE_MAX_DEG = 1.2;
+
+    /**
+     * Apaga el agitamiento (amplitud a 0 y transformaciones a su estado
+     * neutro). Se llama al detener el micrófono, porque el
+     * {@link AnimationTimer} deja de ejecutarse cuando no hay captura y la
+     * amplitud no podría decaer por sí sola.
+     */
+    private void resetImageWiggle() {
+        imageWiggleAmp = 0.0;
+        imageWigglePhase = 0.0;
+        imageWiggleLastNow = -1L;
+        if (imageWiggleTranslate != null) {
+            imageWiggleTranslate.setX(0);
+            imageWiggleTranslate.setY(0);
+        }
+        if (imageWiggleRotate != null) {
+            imageWiggleRotate.setAngle(0);
+        }
+    }
+
     private void toggleMic() {
         if (capture == null) {
             startMic();
@@ -575,6 +689,7 @@ public class PngVoiceApp extends javafx.application.Application {
             cap.start();
             this.capture = cap;
             letterLogger.reset();
+            resetImageWiggle();   // arranca con el avatar en reposo; crece al hablar
             statusLabel.setText("Micrófono: ON"
                     + (voskRecognizer != null ? " (Vosk)" : " (volumen)"));
             toggleButton.setText("Detener micrófono");
@@ -663,6 +778,7 @@ public class PngVoiceApp extends javafx.application.Application {
         applyViseme(Viseme.NEUTRAL);
         volumeBar.setProgress(0.0);
         visemeLabel.setText("Viseme: NEUTRAL");
+        resetImageWiggle();
         LOG.info("Micrófono detenido");
     }
 

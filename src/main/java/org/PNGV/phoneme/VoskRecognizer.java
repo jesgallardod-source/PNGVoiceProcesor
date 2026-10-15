@@ -1,5 +1,7 @@
 package org.PNGV.phoneme;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.PNGV.audio.AudioFrameProcessor;
 import org.PNGV.config.AppConfig;
 import org.slf4j.Logger;
@@ -31,10 +33,14 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  *   new Model(dir)
  *   new Recognizer(model, sampleRate)
  *   recognizer.acceptWaveForm(byte[], int) → boolean (true = fin de frase)
- *   recognizer.getResult()      → String (frase completa)
- *   recognizer.getPartialResult() → String (frase parcial)
- *   recognizer.getFinalResult() → String
+ *   recognizer.getResult()      → JSON {"text":"..."}   (frase completa)
+ *   recognizer.getPartialResult() → JSON {"partial":"..."} (frase parcial)
+ *   recognizer.getFinalResult() → JSON
  * </pre>
+ *
+ * <p><b>Ojo:</b> los resultados son JSON, no texto plano. Este reconocedor los
+ * parsea en {@link #extractText(String)} para obtener el texto real antes de
+ * mapearlo a un viseme.
  */
 public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
 
@@ -58,6 +64,23 @@ public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
     private final Model model;
     private final Recognizer recognizer;
     private volatile Viseme current = Viseme.NEUTRAL;
+
+    /**
+     * Parser JSON para los resultados de Vosk.
+     *
+     * <p><b>IMPORTANTE:</b> {@code Recognizer.getResult()} y
+     * {@code Recognizer.getPartialResult()} <b>no devuelven texto plano</b>,
+     * devuelven un JSON:
+     * <ul>
+     *   <li>Final:   {@code {"text" : "hola mundo"}}</li>
+     *   <li>Parcial: {@code {"partial" : "hola mun"}}</li>
+     * </ul>
+     * Hay que extraer el campo {@code text} o {@code partial} para obtener el
+     * texto real. Si se usa la cadena JSON tal cual, {@link Viseme#fromWord}
+     * no encuentra letras (el JSON empieza por {@code '{'}) y siempre devuelve
+     * {@link Viseme#NEUTRAL}.
+     */
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     /**
      * Cola de visemes emitidos por el reconocedor, en orden de aparición.
@@ -150,12 +173,14 @@ public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
         try {
             boolean endOfUtterance = recognizer.acceptWaveForm(pcm, length);
             if (endOfUtterance) {
-                String text = recognizer.getResult();
+                // Resultado final: JSON con campo "text".
+                String text = extractText(recognizer.getResult());
                 if (text != null && !text.isBlank()) {
                     updateViseme(text);
                 }
             } else {
-                String partial = recognizer.getPartialResult();
+                // Resultado parcial: JSON con campo "partial".
+                String partial = extractText(recognizer.getPartialResult());
                 if (partial != null && !partial.isBlank()) {
                     updateViseme(partial);
                 }
@@ -164,6 +189,54 @@ public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
         } catch (Exception e) {
             LOG.debug("acceptWaveForm: {}", e.getMessage());
             return false;
+        }
+    }
+
+    /**
+     * Extrae el texto reconocible del JSON devuelto por Vosk.
+     *
+     * <p>Vosk devuelve:
+     * <ul>
+     *   <li>Resultado final:   {@code {"text" : "hola mundo"}} → extrae {@code text}</li>
+     *   <li>Resultado parcial: {@code {"partial" : "hola mun"}} → extrae {@code partial}</li>
+     * </ul>
+     *
+     * <p>Es tolerante a fallos: si el JSON no se puede parsear o no contiene
+     * ninguno de los dos campos, devuelve {@code null} (el llamador ya trata
+     * {@code null} como "nada que actualizar"). También soporta el caso (poco
+     * habitual) de que el resultado venga como texto plano, por si algún modelo
+     * o versión lo devuelve así.
+     *
+     * @param rawJson cadena JSON de Vosk (o texto plano), puede ser {@code null}
+     * @return el texto reconocible, o {@code null} si no se pudo extraer
+     */
+    static String extractText(String rawJson) {
+        if (rawJson == null || rawJson.isBlank()) {
+            return null;
+        }
+        String trimmed = rawJson.trim();
+        // Caso defensivo: ya es texto plano (no empieza por '{').
+        if (!trimmed.startsWith("{")) {
+            return trimmed;
+        }
+        try {
+            JsonNode node = JSON.readTree(trimmed);
+            // "text" = resultado final, "partial" = resultado en curso.
+            String candidate = null;
+            JsonNode textNode = node.path("text");
+            if (!textNode.isMissingNode() && !textNode.isNull() && textNode.isTextual()) {
+                candidate = textNode.asText();
+            } else {
+                JsonNode partialNode = node.path("partial");
+                if (!partialNode.isMissingNode() && !partialNode.isNull() && partialNode.isTextual()) {
+                    candidate = partialNode.asText();
+                }
+            }
+            // Normalizamos a null si no hay texto útil (vacio/blank).
+            return (candidate != null && !candidate.isBlank()) ? candidate : null;
+        } catch (Exception e) {
+            LOG.debug("extractText: no se pudo parsear el JSON de Vosk: {}", e.getMessage());
+            return null;
         }
     }
 
@@ -185,7 +258,7 @@ public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
             return;
         }
         String lastWord = lastWord(text);
-        Viseme v = visemeFromWord(lastWord);
+        Viseme v = Viseme.fromWord(lastWord);
         this.current = v;
         // Encola el viseme para que la UI lo consuma en orden (tick). Evitamos
         // repetir el mismo viseme en seguida para no saturar la cola.
@@ -232,30 +305,6 @@ public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
     }
 
     // ------------------------------------------------------------------
-
-    /**
-     * Devuelve el viseme de una palabra usando {@link Viseme#fromLetter(char)}.
-     *
-     * <p>A diferencia de la antigua heurística de {@code dominantViseme}, este
-     * mapeo <b>sí incluye consonantes</b>: se toma la primera letra de la palabra
-     * (el ataque, la forma de boca más reconocible) y se mapea directamente.
-     * Si la primera letra no es una letra, se recorre hasta la primera letra.
-     *
-     * @param word palabra (p. ej. "hola", "programación")
-     * @return viseme de la primera letra, o {@link Viseme#NEUTRAL}
-     */
-    private static Viseme visemeFromWord(String word) {
-        if (word == null) {
-            return Viseme.NEUTRAL;
-        }
-        for (int i = 0; i < word.length(); i++) {
-            char c = word.charAt(i);
-            if (Character.isLetter(c)) {
-                return Viseme.fromLetter(c);
-            }
-        }
-        return Viseme.NEUTRAL;
-    }
 
     private static String lastWord(String text) {
         String trimmed = text.trim();
