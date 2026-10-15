@@ -12,8 +12,9 @@
     <description>App local tipo Veadotube: avatar PNG que reacciona al volumen de la voz y a las sílabas/fonemas pronunciados.</description>
 
     <properties>
-        <maven.compiler.source>21</maven.compiler.source>
-        <maven.compiler.target>21</maven.compiler.target>
+        <!-- Usar `release` en vez de source+target para evitar warnings del compilador
+             y garantizar compatibilidad con los system modules de JDK 21. -->
+        <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <javafx.version>21.0.4</javafx.version>
         <jackson.version>2.17.2</jackson.version>
@@ -54,6 +55,18 @@
             <groupId>com.github.wendykierp</groupId>
             <artifactId>JTransforms</artifactId>
             <version>3.2</version>
+            <!-- JTransforms → JLargeArrays trae junit4 como dep. de compile.
+                 No se necesita en producción → excluir para no inflar el fat-jar. -->
+            <exclusions>
+                <exclusion>
+                    <groupId>junit</groupId>
+                    <artifactId>junit</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.hamcrest</groupId>
+                    <artifactId>hamcrest-core</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <!-- ===== ASR local: Vosk (español) ===== -->
@@ -172,6 +185,29 @@
                                     </excludes>
                                 </filter>
                             </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Limpiar la carpeta destino de jpackage ANTES de que se ejecute,
+                 porque jpackage NO puede sobrescribir una carpeta existente.
+                 Se ejecuta en prepare-package (justo antes de package). -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>clean-jpackage-dest</id>
+                        <phase>prepare-package</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <delete dir="${jpackage.destination}/PNGVoice" quiet="true"/>
+                            </target>
                         </configuration>
                     </execution>
                 </executions>

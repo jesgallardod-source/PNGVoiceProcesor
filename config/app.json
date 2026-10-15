@@ -2,6 +2,7 @@
   "thresholdLow" : -50.0,
   "thresholdMid" : -40.0,
   "thresholdHigh" : -28.0,
+  "screamThreshold" : 0.98,
   "smoothing" : 0.5,
   "bufferFrames" : 1024,
   "sampleRate" : 16000,

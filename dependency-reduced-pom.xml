@@ -67,6 +67,24 @@
         </executions>
       </plugin>
       <plugin>
+        <artifactId>maven-antrun-plugin</artifactId>
+        <version>3.1.0</version>
+        <executions>
+          <execution>
+            <id>clean-jpackage-dest</id>
+            <phase>prepare-package</phase>
+            <goals>
+              <goal>run</goal>
+            </goals>
+            <configuration>
+              <target>
+                <delete />
+              </target>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
         <groupId>org.panteleyev</groupId>
         <artifactId>jpackage-maven-plugin</artifactId>
         <version>1.6.6</version>
@@ -151,12 +169,11 @@
     </dependency>
   </dependencies>
   <properties>
+    <maven.compiler.release>21</maven.compiler.release>
     <jpackage.type>APP_IMAGE</jpackage.type>
     <jpackage.destination>dist</jpackage.destination>
-    <maven.compiler.source>21</maven.compiler.source>
     <mockito.version>5.14.2</mockito.version>
     <jackson.version>2.17.2</jackson.version>
-    <maven.compiler.target>21</maven.compiler.target>
     <skip.jpackage>false</skip.jpackage>
     <slf4j.version>2.0.16</slf4j.version>
     <jpackage.appVersion>1.0.0</jpackage.appVersion>

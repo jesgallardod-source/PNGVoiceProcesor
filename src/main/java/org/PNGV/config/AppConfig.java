@@ -23,6 +23,15 @@ public class AppConfig {
     /** dBFS por encima del cual se pasa a nivel 2 (medio). */
     private double thresholdHigh = -28.0;
 
+    /**
+     * Umbral de volumen <b>normalizado (0..1)</b> a partir del cual el avatar
+     * muestra la imagen de <b>grito</b>. Se elige un valor alto (0.96) para
+     * que el grito solo aparezca cuando el micrófono llega casi al <b>tope</b>
+     * de decibeles, y <b>NO</b> al hablar normal (que suele rondar 0.3..0.6).
+     * Ver {@link org.PNGV.audio.VolumeAnalyzer#getNormalizedLevel()}.
+     */
+    private double screamThreshold = 0.96;
+
     /** Alfa del suavizado exponencial (0..1). 0.5 = muy reactivo, 0.9 = muy suave. */
     private double smoothing = 0.5;
 
@@ -79,6 +88,9 @@ public class AppConfig {
 
     public double getThresholdHigh() { return thresholdHigh; }
     public void setThresholdHigh(double thresholdHigh) { this.thresholdHigh = thresholdHigh; }
+
+    public double getScreamThreshold() { return screamThreshold; }
+    public void setScreamThreshold(double screamThreshold) { this.screamThreshold = screamThreshold; }
 
     public double getSmoothing() { return smoothing; }
     public void setSmoothing(double smoothing) { this.smoothing = smoothing; }

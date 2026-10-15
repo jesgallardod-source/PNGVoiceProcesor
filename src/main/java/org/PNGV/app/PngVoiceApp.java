@@ -244,6 +244,8 @@ public class PngVoiceApp extends javafx.application.Application {
         this.configPath = resolveConfigPath();
         AppConfig config = new ConfigLoader().load(configPath);
         LOG.info("App UI iniciada (config: {})", configPath.toAbsolutePath());
+        // Umbral de grito configurable desde app.json (clave "screamThreshold").
+        gritoNormThreshold = config.getScreamThreshold();
         loadVisemeImages(config);
 
         // ---- Avatar: capa de imágenes propias del usuario ----
@@ -509,7 +511,7 @@ public class PngVoiceApp extends javafx.application.Application {
         }
 
         // Grito: se muestra SOLO cuando el micrófono llega al <b>tope</b> de
-        // decibeles (normalizado >= GRITO_NORM_THRESHOLD, cercano a escala
+        // decibeles (normalizado >= gritoNormThreshold, cercano a escala
         // completa / ~-20 dBFS). NO se dispara al hablar normal: ese rango
         // queda muy por debajo del umbral. Si el usuario asignó alguna imagen
         // de grito, se muestra por encima del viseme normal de habla; si no,
@@ -522,7 +524,7 @@ public class PngVoiceApp extends javafx.application.Application {
         // del umbral) y luego vuelve a cruzarlo, se elige otra variante
         // distinta si es posible, para dar sensación de "variación".
         boolean screamNow = isTalking
-                && normalized >= GRITO_NORM_THRESHOLD
+                && normalized >= gritoNormThreshold
                 && !availableScreams().isEmpty();
         if (screamNow) {
             if (!inScream) {
@@ -761,13 +763,15 @@ public class PngVoiceApp extends javafx.application.Application {
 
     /**
      * Umbral de volumen <b>normalizado (0..1)</b> a partir del cual el avatar
-     * muestra la imagen de <b>grito</b>. Se elige un valor muy alto (0.85)
-     * para que el grito solo aparezca cuando el micrófono llega casi al
-     * <b>tope</b> de decibeles (~-20 dBFS, escala completa), y <b>NO</b> al
-     * hablar normal (que suele rondar 0.3..0.6). Ver
-     * {@link org.PNGV.audio.VolumeAnalyzer#getNormalizedLevel()}.
+     * muestra la imagen de <b>grito</b>. Se elige un valor muy alto para que
+     * el grito solo aparezca cuando el micrófono llega casi al <b>tope</b> de
+     * decibeles, y <b>NO</b> al hablar normal (que suele rondar 0.3..0.6).
+     *
+     * <p>Es <b>configurable</b> desde {@code app.json} bajo la clave
+     * {@code screamThreshold} (ver {@link AppConfig#getScreamThreshold()});
+     * el valor por defecto es 0.96.
      */
-    private static final double GRITO_NORM_THRESHOLD = 0.96;
+    private double gritoNormThreshold = 0.96;
 
     /** Amplitud máxima (px) del desplazamiento del avatar en pleno "agitamiento". */
     private static final double WIGGLE_MAX_PX  = 2.0;
