@@ -52,7 +52,13 @@ public enum Viseme {
     /** Punta de lengua visible. L, R. */
     L,
     /** Boca estrecha / intermedia. S, C, D, G, K, N, T, X, Y, Z, H, Q, W. */
-    S;
+    S,
+    /**
+     * Grito: expresión de boca a gritar. <b>No</b> corresponde a ninguna letra
+     * del alfabeto; se muestra únicamente cuando el micrófono detecta un nivel
+     * de decibeles muy alto (grito).
+     */
+    GRITO;
 
     /** Mapa letra (minúscula) → viseme al que pertenece. */
     private static final Map<Character, Viseme> LETTER_TO_VISEME = buildLetterMap();

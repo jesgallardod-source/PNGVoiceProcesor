@@ -98,7 +98,11 @@ public class PngVoiceApp extends javafx.application.Application {
      */
     private static final List<Viseme> IMAGE_VISEMES = List.of(
             Viseme.NEUTRAL, Viseme.A, Viseme.E, Viseme.I, Viseme.O, Viseme.U,
-            Viseme.BMP, Viseme.FV, Viseme.L, Viseme.S);
+            Viseme.BMP, Viseme.FV, Viseme.L, Viseme.S,
+            // Grito: al final (lugar 12 del panel lateral / menú). No se rota
+            // aleatoriamente; se muestra solo cuando el micrófono detecta un
+            // nivel de decibeles muy alto (ver tick).
+            Viseme.GRITO);
 
     /** Clave especial en el mapa de imágenes para la imagen de parpadeo. */
     private static final String BLINK_KEY = "BLINK";
@@ -463,6 +467,16 @@ public class PngVoiceApp extends javafx.application.Application {
             }
         }
 
+        // Grito: se muestra SOLO cuando el micrófono llega al <b>tope</b> de
+        // decibeles (normalizado >= GRITO_NORM_THRESHOLD, cercano a escala
+        // completa / ~-20 dBFS). NO se dispara al hablar normal: ese rango
+        // queda muy por debajo del umbral. Si el usuario asignó una imagen de
+        // "grito", se muestra por encima del viseme normal de habla; si no,
+        // se conserva el viseme habitual (el avatar no desaparece al gritar).
+        if (isTalking && normalized >= GRITO_NORM_THRESHOLD && visemeImages.containsKey(Viseme.GRITO)) {
+            toShow = Viseme.GRITO;
+        }
+
         // Solo redibujamos si cambió la imagen visible (evita trabajo inútil).
         if (toShow != currentVisible) {
             currentVisible = toShow;
@@ -644,6 +658,16 @@ public class PngVoiceApp extends javafx.application.Application {
         imageWiggleTranslate.setY(dy);
         imageWiggleRotate.setAngle(da);
     }
+
+    /**
+     * Umbral de volumen <b>normalizado (0..1)</b> a partir del cual el avatar
+     * muestra la imagen de <b>grito</b>. Se elige un valor muy alto (0.85)
+     * para que el grito solo aparezca cuando el micrófono llega casi al
+     * <b>tope</b> de decibeles (~-20 dBFS, escala completa), y <b>NO</b> al
+     * hablar normal (que suele rondar 0.3..0.6). Ver
+     * {@link org.PNGV.audio.VolumeAnalyzer#getNormalizedLevel()}.
+     */
+    private static final double GRITO_NORM_THRESHOLD = 0.96;
 
     /** Amplitud máxima (px) del desplazamiento del avatar en pleno "agitamiento". */
     private static final double WIGGLE_MAX_PX  = 2.0;
@@ -1088,6 +1112,7 @@ public class PngVoiceApp extends javafx.application.Application {
             case FV      -> "f/v";
             case L       -> "l/r";
             case S       -> "s/c/d/g/k/n/t/x/y/z/h/q/w";
+            case GRITO   -> "grito";
             default      -> v.name();
         };
     }
