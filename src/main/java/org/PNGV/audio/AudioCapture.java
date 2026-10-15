@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.LineUnavailableException;
+import javax.sound.sampled.Mixer;
 import javax.sound.sampled.TargetDataLine;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -39,6 +40,13 @@ public class AudioCapture implements AutoCloseable {
      * fonemas). Si es {@code null}, solo se publica el volumen.
      */
     private final AudioFrameProcessor frameProcessor;
+    /**
+     * Nombre del micrófono a usar (devuelto por
+     * {@link MicSelector#listMicNames()}). Si es {@code null} o
+     * {@link MicSelector#DEFAULT_MIC}, se usa el micrófono por defecto del
+     * sistema. Se resuelve en {@link #openLine()} vía {@link MicSelector#resolve}.
+     */
+    private final String micName;
 
     private TargetDataLine line;
     private Thread thread;
@@ -61,7 +69,7 @@ public class AudioCapture implements AutoCloseable {
             new AtomicReference<>(VolumeState.SILENCE);
 
     public AudioCapture(AppConfig config, VolumeAnalyzer analyzer) {
-        this(config, analyzer, null);
+        this(config, analyzer, null, null);
     }
 
     /**
@@ -73,9 +81,27 @@ public class AudioCapture implements AutoCloseable {
      * @param frameProcessor callback opcional por buffer PCM (puede ser null)
      */
     public AudioCapture(AppConfig config, VolumeAnalyzer analyzer, AudioFrameProcessor frameProcessor) {
+        this(config, analyzer, frameProcessor, null);
+    }
+
+    /**
+     * Crea un captor que usa un micrófono específico (en vez del por defecto
+     * del sistema).
+     *
+     * @param config         configuración de la app
+     * @param analyzer       analizador de volumen
+     * @param frameProcessor callback opcional por buffer PCM (puede ser null)
+     * @param micName        nombre del micrófono (devuelto por
+     *                       {@link MicSelector#listMicNames()}); {@code null}
+     *                       o {@link MicSelector#DEFAULT_MIC} → micrófono por
+     *                       defecto del sistema
+     */
+    public AudioCapture(AppConfig config, VolumeAnalyzer analyzer,
+                        AudioFrameProcessor frameProcessor, String micName) {
         this.config = config;
         this.analyzer = analyzer;
         this.frameProcessor = frameProcessor;
+        this.micName = micName;
     }
 
     /** Inicia la captura de audio en un hilo separado. */
@@ -112,59 +138,68 @@ public class AudioCapture implements AutoCloseable {
      */
     private void openLine() throws LineUnavailableException {
         int targetRate = config.getSampleRate();
-        AudioFormat desired = new AudioFormat(
-                targetRate,
-                16,          // bits por muestra
-                1,           // mono
-                true,        // signed
-                false);      // little-endian
 
-        // 1) Intentar la frecuencia objetivo directamente.
-        try {
-            line = AudioSystem.getTargetDataLine(desired);
-            line.open(desired, config.getBufferFrames());
-            // El driver puede abrir la línea "con éxito" entregando otra
-            // frecuencia (SRC interna del SO). Verificamos la real para que
-            // el SampleRateFilter use la frecuencia correcta.
-            actualCaptureRate = (int) line.getFormat().getSampleRate();
-            if (actualCaptureRate != targetRate) {
-                LOG.warn("Se pidió {} Hz pero la línea entregó {} Hz; se re-muestreará a {} Hz",
-                        targetRate, actualCaptureRate, targetRate);
-            }
-        } catch (LineUnavailableException e) {
-            // 2) El driver no soporta la frecuencia objetivo. Intentar
-            //    frecuencias de captura comunes, de la más cercana a la
-            //    más lejana. (16 kHz → 32 kHz → 48 kHz → 44.1 kHz → 8 kHz)
-            int[] candidates = {32000, 48000, 44100, 8000};
-            for (int candidate : candidates) {
-                if (candidate == targetRate) {
-                    continue;
-                }
-                AudioFormat fallback = new AudioFormat(candidate, 16, 1, true, false);
-                try {
-                    line = AudioSystem.getTargetDataLine(fallback);
-                    line.open(fallback, config.getBufferFrames());
-                    int actual = (int) line.getFormat().getSampleRate();
-                    if (actual != candidate) {
-                        LOG.warn("Fallback: se pidió {} Hz pero la línea entregó {} Hz",
-                                candidate, actual);
-                    }
-                    actualCaptureRate = actual;
-                    LOG.info("Frecuencia objetivo {} Hz no disponible; capturando a {} Hz (re-muestreado a {} Hz)",
+        // Resolver el micrófono: null = default del sistema, o un mixer
+        // específico si el usuario seleccionó uno en el dropdown.
+        Mixer.Info micInfo = MicSelector.resolve(micName);
+        if (micInfo != null) {
+            LOG.info("AudioCapture: usando micrófono específico: {}", micInfo.getName());
+        }
+
+        // Frecuencias a intentar, ordenadas por preferencia.
+        // La primera es siempre la deseada; las demás son fallbacks.
+        int[] rateCandidates = buildRateCandidates(targetRate);
+        LineUnavailableException lastError = null;
+
+        for (int rate : rateCandidates) {
+            AudioFormat format = new AudioFormat(rate, 16, 1, true, false);
+            TargetDataLine candidate = null;
+            try {
+                candidate = (micInfo != null)
+                        ? AudioSystem.getTargetDataLine(format, micInfo)
+                        : AudioSystem.getTargetDataLine(format);
+
+                candidate.open(format, config.getBufferFrames());
+                line = candidate;
+                // El driver puede abrir la línea "con éxito" entregando otra
+                // frecuencia (SRC interna del SO). Verificamos la real para
+                // que el SampleRateFilter use la frecuencia correcta.
+                actualCaptureRate = (int) line.getFormat().getSampleRate();
+
+                if (rate != targetRate) {
+                    LOG.info("Frecuencia objetivo {} Hz no disponible; "
+                            + "capturando a {} Hz (re-muestreado a {} Hz)",
                             targetRate, actualCaptureRate, targetRate);
-                    break;
-                } catch (LineUnavailableException ignored) {
-                    // Probar la siguiente frecuencia candidata.
                 }
-            }
-            if (line == null) {
-                throw new LineUnavailableException(
-                        "Ninguna frecuencia de captura disponible (se intentó " + targetRate + " Hz)");
+                if (actualCaptureRate != targetRate) {
+                    LOG.warn("Se pidió {} Hz pero la línea entregó {} Hz; "
+                            + "se re-muestreará a {} Hz",
+                            rate, actualCaptureRate, targetRate);
+                }
+                break; // Éxito: salir del loop
+            } catch (LineUnavailableException e) {
+                lastError = e;
+                LOG.debug("No se pudo abrir línea a {} Hz: {}", rate, e.getMessage());
+                if (candidate != null) {
+                    try {
+                        candidate.close();
+                    } catch (Exception ignored) {
+                        // Best effort cleanup
+                    }
+                }
             }
         }
 
-        // 3) Construir el re-muestreador (passthrough si ya está a la
-        //    frecuencia objetivo, o real si hay que convertir).
+        if (line == null) {
+            String msg = "Ninguna frecuencia de captura disponible "
+                    + "(se intentó " + targetRate + " Hz"
+                    + (micName != null ? ", micrófono: " + micName : "") + ")"
+                    + (lastError != null ? ": " + lastError.getMessage() : "");
+            throw new LineUnavailableException(msg);
+        }
+
+        // Construir el re-muestreador (passthrough si ya está a la
+        // frecuencia objetivo, o real si hay que convertir).
         resampler = new SampleRateFilter(actualCaptureRate, targetRate);
         if (resampler.isPassthrough()) {
             LOG.info("AudioCapture: pipeline a {} Hz (passthrough, sin re-muestreo)", targetRate);
@@ -174,6 +209,23 @@ public class AudioCapture implements AutoCloseable {
         }
 
         line.start();
+    }
+
+    /**
+     * Construye la lista de frecuencias a intentar, con la deseada primero
+     * y los fallbacks después (ordenadas por cercanía a 16 kHz).
+     */
+    private static int[] buildRateCandidates(int targetRate) {
+        int[] all = {16000, 32000, 48000, 44100, 22050, 8000};
+        int[] result = new int[all.length];
+        int idx = 0;
+        result[idx++] = targetRate; // siempre primero
+        for (int rate : all) {
+            if (rate != targetRate) {
+                result[idx++] = rate;
+            }
+        }
+        return java.util.Arrays.copyOf(result, idx);
     }
 
     private void loop() {
@@ -228,6 +280,16 @@ public class AudioCapture implements AutoCloseable {
     /** Devuelve el estado de volumen más reciente. */
     public VolumeState getState() {
         return stateRef.get();
+    }
+
+    /**
+     * Nombre del micrófono configurado para este captor.
+     *
+     * @return el nombre del micrófono, o {@code null} si es el por defecto
+     *         del sistema
+     */
+    public String getMicName() {
+        return micName;
     }
 
     @Override

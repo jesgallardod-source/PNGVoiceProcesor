@@ -55,6 +55,13 @@ public class AppConfig {
     private boolean vibrationEnabled = true;
 
     /**
+     * Nombre del micrófono seleccionado (el nombre que muestra
+     * {@link javax.sound.sampled.Mixer.Info#getName()}).
+     * <p>{@code null} o cadena vacía = usar el micrófono por defecto del sistema.
+     */
+    private String selectedMic;
+
+    /**
      * Imágenes propias del usuario, una por <b>viseme/letra</b>.
      *
      * <p>Clave = nombre del viseme (p. ej. "A", "E", "NEUTRAL") y valor =
@@ -93,6 +100,9 @@ public class AppConfig {
 
     public boolean isVibrationEnabled() { return vibrationEnabled; }
     public void setVibrationEnabled(boolean vibrationEnabled) { this.vibrationEnabled = vibrationEnabled; }
+
+    public String getSelectedMic() { return selectedMic; }
+    public void setSelectedMic(String selectedMic) { this.selectedMic = selectedMic; }
 
     public Map<String, String> getVisemeImages() {
         return visemeImages;

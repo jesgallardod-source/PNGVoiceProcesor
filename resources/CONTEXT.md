@@ -98,6 +98,7 @@ org.PNGV
 ├── audio
 │   ├── AudioCapture              ← TargetDataLine + hilo de lectura
 │   ├── AudioFrameProcessor       ← @FunctionalInterface: callback por buffer PCM
+│   ├── MicSelector               ← Enumera/resuelve micrófonos (AudioSystem.getMixerInfo + probe TargetDataLine)
 │   └── VolumeAnalyzer            ← RMS → dBFS → EMA → nivel 0-3
 ├── phoneme
 │   ├── PhonemeRecognizer         ← Interfaz (recognize, currentViseme, close)

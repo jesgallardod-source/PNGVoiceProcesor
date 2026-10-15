@@ -12,6 +12,7 @@ import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
+import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.Menu;
 import javafx.scene.control.MenuBar;
@@ -32,6 +33,7 @@ import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 import org.PNGV.audio.AudioCapture;
 import org.PNGV.audio.AudioFrameProcessor;
+import org.PNGV.audio.MicSelector;
 import org.PNGV.audio.VolumeAnalyzer;
 import org.PNGV.config.AppConfig;
 import org.PNGV.config.ConfigLoader;
@@ -189,6 +191,7 @@ public class PngVoiceApp extends javafx.application.Application {
     private Button toggleButton;
     private Button togglePanelButton;   // muestra/oculta el panel lateral de letras
     private Button vibrationButton;     // activa/desactiva la vibración del avatar
+    private ComboBox<String> micBox;    // selector de micrófono (dropdown)
     /** true si la vibración (agitamiento) del avatar está habilitada. */
     private boolean vibrationEnabled = true;
     private Label rightLetterLabel;    // etiqueta del panel derecho con la letra actual
@@ -313,9 +316,38 @@ public class PngVoiceApp extends javafx.application.Application {
         vibrationButton.setStyle(panelButtonStyle(vibrationEnabled ? "#a6e3a1" : "#f38ba8"));
         vibrationButton.setOnAction(e -> toggleVibration(configPath));
 
-        // ---- Fila de botones: iniciar/stop + vibración (+ mostrar/ocultar panel) ----
+        // ---- Selector de micrófono (dropdown) ----
+        // Enumera los micrófonos de entrada disponibles (dispositivos de
+        // captura del SO) + una entrada "(Predeterminado del sistema)" que
+        // representa el default. Al cambiar la selección se persiste en la
+        // config y, si el micrófono está activo, se reinicia para usar el
+        // nuevo dispositivo.
+        micBox = new ComboBox<>();
+        List<String> micNames = MicSelector.listMicNames();
+        micBox.getItems().addAll(micNames);
+        String currentMic = config.getSelectedMic();
+        if (currentMic == null || currentMic.isEmpty()
+                || !micNames.contains(currentMic)) {
+            micBox.setValue(MicSelector.DEFAULT_MIC);
+        } else {
+            micBox.setValue(currentMic);
+        }
+        micBox.setMaxWidth(260);
+        micBox.setStyle(
+                "-fx-background-color: #2a2a3a;"
+                + "-fx-text-fill: white;"
+                + "-fx-focus-color: #89b4fa;"
+                + "-fx-font-size: 12px;"
+                + ".combo-box-list-cell: -fx-text-fill: white; -fx-background-color: #2a2a3a;"
+                + ".combo-box-list-cell:hover: -fx-background-color: #3a3a4a;"
+                + ".combo-box-list-cell:selected: -fx-background-color: #4a4a5a;");
+        micBox.setPromptText("Micrófono");
+        micBox.valueProperty().addListener((obs, oldVal, newVal) -> onMicSelected(newVal));
+
+        // ---- Fila de botones: iniciar/stop + micrófono + vibración (+ mostrar/ocultar panel) ----
         HBox controls = new HBox(12,
                 toggleButton,
+                micBox,
                 vibrationButton);
         controls.setAlignment(Pos.CENTER);
         controls.setPadding(new Insets(8));
@@ -796,6 +828,43 @@ public class PngVoiceApp extends javafx.application.Application {
         LOG.info("Vibración del avatar: {}", vibrationEnabled ? "ON" : "OFF");
     }
 
+    /**
+     * Reacciona al cambio de selección del micrófono en el dropdown.
+     *
+     * <p>1) Persiste la selección en la config.
+     * <p>2) Si el micrófono está activo ({@code capture != null}), lo reinicia
+     *    (stop + start) para que el nuevo dispositivo tome efecto de inmediato.
+     *    Si está detenido, simplemente guarda la preferencia para el próximo
+     *    inicio.
+     *
+     * @param micName nombre del micrófono seleccionado (o {@link MicSelector#DEFAULT_MIC})
+     */
+    private void onMicSelected(String micName) {
+        if (micName == null) {
+            return;
+        }
+        // Normalizar: "(Predeterminado del sistema)" → null (default del SO).
+        String toSave = MicSelector.DEFAULT_MIC.equals(micName) ? null : micName;
+
+        // 1) Persistir.
+        try {
+            ConfigLoader loader = new ConfigLoader();
+            AppConfig cfg = loader.load(configPath);
+            cfg.setSelectedMic(toSave);
+            loader.save(configPath, cfg);
+        } catch (RuntimeException e) {
+            LOG.warn("No se pudo persistir la selección de micrófono", e);
+        }
+        LOG.info("Micrófono seleccionado: {}", (toSave == null ? "default del sistema" : toSave));
+
+        // 2) Si el micrófono está activo, reiniciarlo con el nuevo dispositivo.
+        if (capture != null) {
+            LOG.info("Micrófono activo: reiniciando para aplicar el nuevo dispositivo");
+            stopMic();
+            startMic();
+        }
+    }
+
     private void startMic() {
         try {
             AppConfig config = new ConfigLoader().load(configPath);
@@ -827,7 +896,14 @@ public class PngVoiceApp extends javafx.application.Application {
                         config.getModelPath());
             }
 
-            AudioCapture cap = new AudioCapture(config, analyzer, frameProcessor);
+            // Usar el micrófono seleccionado en el dropdown (null = default del SO).
+            String micName = config.getSelectedMic();
+            if (micName != null && !micName.isEmpty() && !MicSelector.DEFAULT_MIC.equals(micName)) {
+                LOG.info("Iniciando captura con micrófono: {}", micName);
+            } else {
+                LOG.info("Iniciando captura con el micrófono por defecto del sistema");
+            }
+            AudioCapture cap = new AudioCapture(config, analyzer, frameProcessor, micName);
             cap.start();
             this.capture = cap;
             letterLogger.reset();
