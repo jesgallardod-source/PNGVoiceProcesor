@@ -1,0 +1,240 @@
+[INFO] Scanning for projects...
+[INFO] 
+[INFO] -------------------------< org.PNGV:PNGVoice >--------------------------
+[INFO] Building PNGVoice 1.0-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- help:3.5.2:describe (default-cli) @ PNGVoice ---
+[INFO] Mojo: 'jpackage:jpackage'
+jpackage:jpackage
+  Description: Generates application package. Each plugin parameter defines
+    jpackage option. For detailed information about these options please refer
+    to Packaging Tool User's Guide
+  Implementation: org.panteleyev.jpackage.JPackageMojo
+  Language: java
+
+  Available parameters:
+
+    aboutUrl
+      --about-url
+
+    additionalOptions
+      Additional jpackage options not covered by dedicated plugin parameters.
+      Example: --jlink-options --bind-services
+
+    addModules
+      --add-modules [,]
+
+    appContentPaths
+      --app-content additional-content[,additional-content...] Example: ./docs
+      ./images
+
+    appImage
+      --app-image
+
+    appVersion (Default: ${project.version})
+      --app-version
+
+    arguments
+      --arguments
+
+    bindServices
+      --bind-services This option is supported by jpackage versions 14 and 15
+      only.
+
+    copyright
+      --copyright
+
+    description
+      --description
+
+    destination
+      --dest
+
+    fileAssociations
+      --file-associations Each property file is specified by a separate
+      parameter. Example: src/properties/java.properties
+      src/properties/cpp.properties
+
+    icon
+      --icon
+
+    input
+      --input
+
+    installDir
+      --install-dir
+
+    javaOptions
+      --java-options
+
+    jLinkOptions
+      jlink options. Example: --strip-native-commands --strip-debug
+
+    launcherAsService
+      --launcher-as-service
+
+    launchers
+      --add-launcher = Application launchers specified by one
+      name-of-the-launcher /path/to/launcher.properties element for each
+      launcher.
+
+    licenseFile
+      --license-file
+
+    linuxAppCategory
+      --linux-app-category
+
+    linuxAppRelease
+      --linux-app-release
+
+    linuxDebMaintainer
+      --linux-deb-maintainer
+
+    linuxMenuGroup
+      --linux-menu-group
+
+    linuxPackageDeps
+      --linux-package-deps
+
+    linuxPackageName
+      --linux-package-name
+
+    linuxRpmLicenseType
+      --linux-rpm-license-type
+
+    linuxShortcut
+      --linux-shortcut
+
+    macAppCategory
+      --mac-app-category
+
+    macAppStore
+      --mac-app-store
+
+    macBundleSigningPrefix
+      --mac-bundle-signing-prefix This option is supported by jpackage versions
+      14, 15 and 16 only.
+
+    macDmgContentPaths
+      --mac-dmg-content additional-content[,additional-content...] Example:
+      ./docs ./images
+
+    macEntitlements
+      --mac-entitlements
+
+    macPackageIdentifier
+      --mac-package-identifier
+
+    macPackageName
+      --mac-package-name
+
+    macPackageSigningPrefix
+      --mac-package-signing-prefix
+
+    macSign
+      --mac-sign
+
+    macSigningKeychain
+      --mac-signing-keychain
+
+    macSigningKeyUserName
+      --mac-signing-key-user-name
+
+    mainClass
+      --main-class
+
+    mainJar
+      --main-jar
+
+    module
+      --module [/]
+
+    modulePaths
+      Each module path is specified by a separate parameter. Example:
+      target/jmods
+
+    name (Default: ${project.name})
+      --name
+
+    removeDestination
+      Remove destination directory. jpackage utility fails if generated binary
+      already exists. In order to work around this behaviour there is plugin
+      boolean option removeDestination. If true plugin will try to delete
+      directory specified by destination. This might be useful to relaunch
+      jpackage task without rebuilding an entire project. For safety reasons
+      plugin will not process removeDestination if destination points to a
+      location outside of ${project.build.directory}.
+
+    resourceDir
+      --resource-dir
+
+    runtimeImage
+      --runtime-image
+
+    skip (Default: false)
+      Skips plugin execution.
+
+    temp
+      --temp
+
+    type
+      --type Possible values: Plugin JPackage APP_IMAGE app-image DMG dmg PKG
+      pkg EXE exe MSI msi DEB deb
+
+    vendor
+      --vendor
+
+    verbose
+      --verbose
+
+    winConsole
+      --win-console
+
+    winDirChooser
+      --win-dir-chooser
+
+    winHelpUrl
+      --win-help-url
+
+    winMenu
+      --win-menu
+
+    winMenuGroup
+      --win-menu-group
+
+    winPerUserInstall
+      --win-per-user-install
+
+    winShortcut
+      --win-shortcut
+
+    winShortcutPrompt
+      --win-shortcut-prompt
+
+    winUpdateUrl
+      --win-update-url
+
+    winUpgradeUuid
+      --win-upgrade-uuid
+
+
+[INFO] 
+[INFO] -------------------------< org.PNGV:PNGVoice >--------------------------
+[INFO] Building PNGVoice 1.0-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD FAILURE
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  0.967 s
+[INFO] Finished at: 2026-10-15T13:44:33-05:00
+[INFO] ------------------------------------------------------------------------
+[ERROR] Unknown lifecycle phase ";". You must specify a valid lifecycle phase or a goal in the format <plugin-prefix>:<goal> or <plugin-group-id>:<plugin-artifact-id>[:<plugin-version>]:<goal>. Available lifecycle phases are: pre-clean, clean, post-clean, validate, initialize, generate-sources, process-sources, generate-resources, process-resources, compile, process-classes, generate-test-sources, process-test-sources, generate-test-resources, process-test-resources, test-compile, process-test-classes, test, prepare-package, package, pre-integration-test, integration-test, post-integration-test, verify, install, deploy, pre-site, site, post-site, site-deploy. -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/LifecyclePhaseNotFoundException

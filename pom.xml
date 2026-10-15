@@ -21,6 +21,19 @@
         <logback.version>1.5.8</logback.version>
         <junit.version>5.11.3</junit.version>
         <mockito.version>5.14.2</mockito.version>
+
+        <!-- ===== Generación de instalador / .exe (jpackage) ===== -->
+        <!-- Tipo de salida de jpackage (org.panteleyev.jpackage.ImageType, enum en MAYÚSCULAS).
+             Opciones válidas: APP_IMAGE (carpeta con PNGVoice.exe, recomendado, no requiere WiX),
+             EXE / MSI (instalador, requieren WiX en Windows), DMG/PKG (macOS), DEB / RPM (Linux).
+             NO usar "app-image" (con guion/minúsculas): Maven no lo convierte al enum. -->
+        <jpackage.type>APP_IMAGE</jpackage.type>
+        <!-- Pasa a true para omitir la generación del .exe (p. ej. en CI o builds rápidos). -->
+        <skip.jpackage>false</skip.jpackage>
+        <!-- Versión de la app para jpackage (debe ser numérica: X.Y.Z, no "1.0-SNAPSHOT"). -->
+        <jpackage.appVersion>1.0.0</jpackage.appVersion>
+        <!-- Carpeta donde se deposita el resultado (PNGVoice.exe / instalador). -->
+        <jpackage.destination>dist</jpackage.destination>
     </properties>
 
     <dependencies>
@@ -160,6 +173,45 @@
                                 </filter>
                             </filters>
                         </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- jpackage: genera el .exe (o instalador) autocontenido con su propio JRE.
+                 Usa jpackage del JDK (requiere JDK 14+). Se ejecuta en la fase `package`,
+                 después del fat-jar de shade, usando ese jar como entrada.
+                 Salida por defecto: dist/PNGVoice/PNGVoice.exe (tipo app-image). -->
+            <plugin>
+                <groupId>org.panteleyev</groupId>
+                <artifactId>jpackage-maven-plugin</artifactId>
+                <version>1.6.6</version>
+                <configuration>
+                    <name>PNGVoice</name>
+                    <appVersion>${jpackage.appVersion}</appVersion>
+                    <!-- Carpeta con el fat-jar (mainJar). jpackage lo necesita como input
+                         para apps no modulares; sin él falla al no encontrar el jar. -->
+                    <input>${project.build.directory}</input>
+                    <vendor>org.PNGV</vendor>
+                    <description>Avatar PNG que reacciona al volumen de la voz y a los fonemas pronunciados.</description>
+                    <mainJar>PNGVoice-${project.version}.jar</mainJar>
+                    <mainClass>org.PNGV.Main</mainClass>
+                    <type>${jpackage.type}</type>
+                    <destination>${jpackage.destination}</destination>
+                    <!-- JavaFX: las dependencias org.openjfx ya están en el fat-jar,
+                         así que jpackage solo necesita la main class. -->
+                    <javaOptions>
+                        <option>-Xmx1g</option>
+                    </javaOptions>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>create-app-image</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>
+                                jpackage
+                            </goal>
+                        </goals>
                     </execution>
                 </executions>
             </plugin>

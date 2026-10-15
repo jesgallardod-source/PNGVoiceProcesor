@@ -66,6 +66,34 @@
           </execution>
         </executions>
       </plugin>
+      <plugin>
+        <groupId>org.panteleyev</groupId>
+        <artifactId>jpackage-maven-plugin</artifactId>
+        <version>1.6.6</version>
+        <executions>
+          <execution>
+            <id>create-app-image</id>
+            <phase>package</phase>
+            <goals>
+              <goal>jpackage</goal>
+            </goals>
+          </execution>
+        </executions>
+        <configuration>
+          <name>PNGVoice</name>
+          <appVersion>${jpackage.appVersion}</appVersion>
+          <input>${project.build.directory}</input>
+          <vendor>org.PNGV</vendor>
+          <description>Avatar PNG que reacciona al volumen de la voz y a los fonemas pronunciados.</description>
+          <mainJar>PNGVoice-${project.version}.jar</mainJar>
+          <mainClass>org.PNGV.Main</mainClass>
+          <type>${jpackage.type}</type>
+          <destination>${jpackage.destination}</destination>
+          <javaOptions>
+            <option>-Xmx1g</option>
+          </javaOptions>
+        </configuration>
+      </plugin>
     </plugins>
   </build>
   <dependencies>
@@ -123,14 +151,18 @@
     </dependency>
   </dependencies>
   <properties>
-    <maven.compiler.target>21</maven.compiler.target>
-    <slf4j.version>2.0.16</slf4j.version>
+    <jpackage.type>APP_IMAGE</jpackage.type>
+    <jpackage.destination>dist</jpackage.destination>
     <maven.compiler.source>21</maven.compiler.source>
+    <mockito.version>5.14.2</mockito.version>
+    <jackson.version>2.17.2</jackson.version>
+    <maven.compiler.target>21</maven.compiler.target>
+    <skip.jpackage>false</skip.jpackage>
+    <slf4j.version>2.0.16</slf4j.version>
+    <jpackage.appVersion>1.0.0</jpackage.appVersion>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <javafx.version>21.0.4</javafx.version>
     <junit.version>5.11.3</junit.version>
-    <mockito.version>5.14.2</mockito.version>
-    <jackson.version>2.17.2</jackson.version>
     <logback.version>1.5.8</logback.version>
   </properties>
 </project>

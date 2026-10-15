@@ -255,7 +255,27 @@ mvn javafx:run
 
 # Limpiar
 mvn clean
+
+# Generar .exe (app-image autocontenido con JRE) → dist/PNGVoice/PNGVoice.exe
+mvn clean package
+
+# Saltarse la generación del .exe (build rápido)
+mvn clean package -Dskip.jpackage=true
 ```
+
+> **Generación del `.exe` (jpackage):** se usa `org.panteleyev:jpackage-maven-plugin`
+> en la fase `package`, después del fat-jar de `maven-shade-plugin`.
+> - Tipo por defecto: `APP_IMAGE` (carpeta con `PNGVoice.exe`, sin instalar, no requiere WiX).
+>   Para instalador: `-Djpackage.type=EXE` o `MSI` (requieren WiX Toolset en Windows).
+> - Salida: `dist/PNGVoice/PNGVoice.exe` (propiedades `jpackage.destination`, `jpackage.appVersion`).
+> - **Requisitos en el `pom.xml` que rompen si faltan:**
+>   - `jpackage.type` debe ser un valor del enum `org.panteleyev.jpackage.ImageType`
+>     **en MAYÚSCULAS** (`APP_IMAGE`, `EXE`, `MSI`, `DMG`, `PKG`, `DEB`, `RPM`).
+>     NO usar `app-image` (con guion/minúsculas) → Maven falla:
+>     `Cannot convert 'app-image' to Enum`.
+>   - `<input>${project.build.directory}</input>` es **obligatorio** para apps no
+>     modulares; sin él jpackage falla: `Missing --input parameter`.
+> - La main class empaquetada es `org.PNGV.Main` (fat-jar de shade).
 
 > **Prerrequisito para reconocimiento:** modelo Vosk en
 > `assets/models/vosk-model-small-es-0.42/` (descargar de

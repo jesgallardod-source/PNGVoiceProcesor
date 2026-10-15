@@ -54,11 +54,15 @@ public enum Viseme {
     /** Boca estrecha / intermedia. S, C, D, G, K, N, T, X, Y, Z, H, Q, W. */
     S,
     /**
-     * Grito: expresión de boca a gritar. <b>No</b> corresponde a ninguna letra
-     * del alfabeto; se muestra únicamente cuando el micrófono detecta un nivel
-     * de decibeles muy alto (grito).
+     * Grito (variante 1): expresión de boca a gritar. <b>No</b> corresponde a
+     * ninguna letra del alfabeto; se muestra únicamente cuando el micrófono
+     * detecta un nivel de decibeles muy alto (grito).
      */
-    GRITO;
+    GRITO,
+    /** Grito (variante 2): segunda imagen disponible para el grito. */
+    GRITO2,
+    /** Grito (variante 3): tercera imagen disponible para el grito. */
+    GRITO3;
 
     /** Mapa letra (minúscula) → viseme al que pertenece. */
     private static final Map<Character, Viseme> LETTER_TO_VISEME = buildLetterMap();

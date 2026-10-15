@@ -99,10 +99,13 @@ public class PngVoiceApp extends javafx.application.Application {
     private static final List<Viseme> IMAGE_VISEMES = List.of(
             Viseme.NEUTRAL, Viseme.A, Viseme.E, Viseme.I, Viseme.O, Viseme.U,
             Viseme.BMP, Viseme.FV, Viseme.L, Viseme.S,
-            // Grito: al final (lugar 12 del panel lateral / menú). No se rota
-            // aleatoriamente; se muestra solo cuando el micrófono detecta un
-            // nivel de decibeles muy alto (ver tick).
-            Viseme.GRITO);
+            // Gritos: al final del panel lateral / menú. No se rotan
+            // aleatoriamente en el habla normal; se muestran solo cuando el
+            // micrófono detecta un nivel de decibeles muy alto (ver tick).
+            // Al dispararse un grito, el avatar elige una de las variantes
+            // disponibles y la mantiene durante el episodio; al volver a
+            // gritar (nuevo cruce del umbral) rota a la siguiente variante.
+            Viseme.GRITO, Viseme.GRITO2, Viseme.GRITO3);
 
     /** Clave especial en el mapa de imágenes para la imagen de parpadeo. */
     private static final String BLINK_KEY = "BLINK";
@@ -172,6 +175,12 @@ public class PngVoiceApp extends javafx.application.Application {
     private boolean isHoldingFirst = false;
     /** Marca (ns, AnimationTimer) de cuándo se fijó la imagen visible actual. */
     private long visibleImageStartNanos = 0L;
+
+    // ---- Estado del grito (ver tick) ----
+    /** true mientras el avatar está en un "episodio" de grito activo. */
+    private boolean inScream = false;
+    /** Viseme de grito elegido para el episodio actual (se mantiene hasta que se detenga). */
+    private Viseme currentScream = Viseme.GRITO;
 
     // Nodos UI
     private ProgressBar volumeBar;
@@ -470,11 +479,40 @@ public class PngVoiceApp extends javafx.application.Application {
         // Grito: se muestra SOLO cuando el micrófono llega al <b>tope</b> de
         // decibeles (normalizado >= GRITO_NORM_THRESHOLD, cercano a escala
         // completa / ~-20 dBFS). NO se dispara al hablar normal: ese rango
-        // queda muy por debajo del umbral. Si el usuario asignó una imagen de
-        // "grito", se muestra por encima del viseme normal de habla; si no,
+        // queda muy por debajo del umbral. Si el usuario asignó alguna imagen
+        // de grito, se muestra por encima del viseme normal de habla; si no,
         // se conserva el viseme habitual (el avatar no desaparece al gritar).
-        if (isTalking && normalized >= GRITO_NORM_THRESHOLD && visemeImages.containsKey(Viseme.GRITO)) {
-            toShow = Viseme.GRITO;
+        //
+        // Rotación entre variantes: el avatar puede tener hasta 3 imágenes de
+        // grito (GRITO, GRITO2, GRITO3). Al <b>iniciar</b> un episodio de grito
+        // se elige una al azar entre las disponibles y se <b>mantiene</b>
+        // mientras el grito continúe. Si el grito se detiene (cae por debajo
+        // del umbral) y luego vuelve a cruzarlo, se elige otra variante
+        // distinta si es posible, para dar sensación de "variación".
+        boolean screamNow = isTalking
+                && normalized >= GRITO_NORM_THRESHOLD
+                && !availableScreams().isEmpty();
+        if (screamNow) {
+            if (!inScream) {
+                // Nuevo episodio de grito: elegir una variante (distinta a la
+                // anterior si hay al menos dos disponibles).
+                List<Viseme> pool = availableScreams();
+                Viseme pick;
+                if (pool.size() == 1) {
+                    pick = pool.get(0);
+                } else {
+                    int idx;
+                    do {
+                        idx = random.nextInt(pool.size());
+                    } while (pool.get(idx) == currentScream);
+                    pick = pool.get(idx);
+                }
+                currentScream = pick;
+                inScream = true;
+            }
+            toShow = currentScream;
+        } else {
+            inScream = false;
         }
 
         // Solo redibujamos si cambió la imagen visible (evita trabajo inútil).
@@ -484,6 +522,23 @@ public class PngVoiceApp extends javafx.application.Application {
         applyViseme(currentVisible);
         volumeBar.setProgress(normalized);
         visemeLabel.setText("Viseme: " + currentVisible);
+    }
+
+    /**
+     * Devuelve la lista (en orden fijo GRITO → GRITO2 → GRITO3) de las
+     * <b>variantes de grito que tienen imagen asignada</b>. Se usa para saber
+     * si hay alguna imagen de grito disponible y, en su caso, rotar entre
+     * variantes distintas al iniciar un episodio de grito (ver
+     * {@link #tick(int, double, long)}).
+     *
+     * @return lista de visemes de grito con imagen cargada (puede estar vacía)
+     */
+    private List<Viseme> availableScreams() {
+        List<Viseme> pool = new ArrayList<>(3);
+        if (visemeImages.containsKey(Viseme.GRITO))  pool.add(Viseme.GRITO);
+        if (visemeImages.containsKey(Viseme.GRITO2)) pool.add(Viseme.GRITO2);
+        if (visemeImages.containsKey(Viseme.GRITO3)) pool.add(Viseme.GRITO3);
+        return pool;
     }
 
     /** Elige un viseme de "hablando" aleatorio según el nivel de volumen. */
@@ -1113,6 +1168,8 @@ public class PngVoiceApp extends javafx.application.Application {
             case L       -> "l/r";
             case S       -> "s/c/d/g/k/n/t/x/y/z/h/q/w";
             case GRITO   -> "grito";
+            case GRITO2  -> "grito 2";
+            case GRITO3  -> "grito 3";
             default      -> v.name();
         };
     }
