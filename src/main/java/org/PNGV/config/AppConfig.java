@@ -35,6 +35,41 @@ public class AppConfig {
     /** Alfa del suavizado exponencial (0..1). 0.5 = muy reactivo, 0.9 = muy suave. */
     private double smoothing = 0.5;
 
+    /**
+     * Duración mínima (ms) que se muestra <b>cada sílaba</b> (viseme) en la
+     * fila de reproducción antes de avanzar a la siguiente.
+     *
+     * <p>Cuanto más bajo, más rápida y fluida se ve la boca (más sílabas/s).
+     * El default 80 ms (~12 sílabas/s) es más rápido que el habla natural
+     * (~150 ms) para que el cambio de imagen se sienta continuo y cercano a
+     * una persona pronunciando, sin "pulsos" entre sílaba y sílaba.
+     *
+     * <p>Para afinarlo sin recompilar, cámbialo en {@code app.json}
+     * (clave {@code syllableMinMs}).
+     */
+    private long syllableMinMs = 80L;
+
+    /**
+     * Duración (ms) que se mantiene la <b>última</b> sílaba hablada antes de
+     * volver a NEUTRAL al llegar el silencio entre palabras.
+     *
+     * <p>Siempre que la siguiente sílaba llegue <b>dentro</b> de este tiempo,
+     * el avatar <b>NO</b> vuelve a NEUTRAL: conserva la última boca hasta que
+     * llegue la siguiente. Así las sílabas cercanas (y las palabras
+     * consecutivas pronunciadas sin pausa) se ven <b>continuas</b>, sin el
+     * "parpadeo" a boca cerrada. Solo cuando pasa más de este tiempo sin nueva
+     * sílaba (pausa real) el avatar vuelve a NEUTRAL.
+     *
+     * <p>Cuanto más alto, más tiempo se mantiene la última sílaba (más
+     * continuidad, menos saltos a neutro). El default 200 ms cubre las pausas
+     * típicas entre sílabas/palabras (~80–160 ms) sin "congelar" el avatar en
+     * NEUTRAL, y deja que las pausas largas (>200 ms) cierren la boca.
+     *
+     * <p>Para afinarlo sin recompilar, cámbialo en {@code app.json}
+     * (clave {@code silenceHoldMs}).
+     */
+    private long silenceHoldMs = 200L;
+
     /** Muestra por buffer de captura (16-bit). 1024 es un buen valor. */
     private int bufferFrames = 1024;
     /**
@@ -94,6 +129,12 @@ public class AppConfig {
 
     public double getSmoothing() { return smoothing; }
     public void setSmoothing(double smoothing) { this.smoothing = smoothing; }
+
+    public long getSyllableMinMs() { return syllableMinMs; }
+    public void setSyllableMinMs(long syllableMinMs) { this.syllableMinMs = syllableMinMs; }
+
+    public long getSilenceHoldMs() { return silenceHoldMs; }
+    public void setSilenceHoldMs(long silenceHoldMs) { this.silenceHoldMs = silenceHoldMs; }
 
     public int getBufferFrames() { return bufferFrames; }
     public void setBufferFrames(int bufferFrames) { this.bufferFrames = bufferFrames; }

@@ -107,6 +107,28 @@ public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
     private volatile String lastLoggedText = "";
 
     /**
+     * Última palabra ya procesada desde resultados parciales. Sirve para
+     * detectar cuándo aparece una <b>nueva palabra</b> al final del texto
+     * parcial y encolar sus sílabas en tiempo real (sin esperar al FINAL).
+     */
+    private volatile String lastProcessedPartialWord = "";
+
+    /**
+     * Última palabra reconocida (ya sea por parcial o por final). Se usa
+     * únicamente para <b>logging</b>: registrar cada vez que el reconocedor
+     * detecta una palabra nueva, de modo que sea fácil diagnosticar cuándo la
+     * imagen de pronunciación NO se está actualizando.
+     *
+     * <p><b>Diagnóstico de "la imagen no se actualiza":</b> si en el log no
+     * aparecen líneas {@code [VOSK] WORD ...}, entonces el reconocedor NO está
+     * detectando nuevas palabras (Vosk no produce texto, o el texto parcial no
+     * cambia). Si aparecen {@code WORD} pero la imagen sigue sin cambiar, el
+     * problema está en el consumo de la cola en la UI (buscar
+     * {@code [UI] IMG ...}).
+     */
+    private volatile String lastRecognizedWord = "";
+
+    /**
      * Crea un reconocedor a partir de la ruta al modelo de Vosk.
      *
      * @param config configuración de la app (contiene {@code modelPath} y {@code sampleRate})
@@ -190,17 +212,31 @@ public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
                     // Reinicia el guard para que la siguiente frase (aunque repita
                     // la misma palabra) se loguee de nuevo.
                     lastLoggedText = "";
+                    // Reinicia el guard de palabras parciales para que la
+                    // siguiente frase se procese desde cero.
+                    lastProcessedPartialWord = "";
                     // Mapea la última palabra en sílabas y encola un viseme por sílaba.
+                    String finalWord = lastWord(text);
+                    logNewWord(finalWord, "FINAL");
                     updateVisemesFromSyllables(text);
                 }
             } else {
-                // Resultado parcial: solo loguea (no actualiza viseme).
+                // Resultado parcial: procesa en tiempo real cada nueva palabra
+                // detectada para que la imagen se actualice sin esperar al FINAL.
                 String rawJson = recognizer.getPartialResult();
                 String partial = extractText(rawJson);
                 if (partial != null && !partial.isBlank()) {
                     if (!partial.equals(lastLoggedText)) {
                         lastLoggedText = partial;
                         LOG.info("[Vosk {}] PARTIAL text='{}'", System.currentTimeMillis(), partial);
+                    }
+                    // Detecta si aparece una NUEVA palabra al final del texto
+                    // parcial y encola sus sílabas inmediatamente.
+                    String currentWord = lastWord(partial);
+                    if (!currentWord.isEmpty() && !currentWord.equals(lastProcessedPartialWord)) {
+                        lastProcessedPartialWord = currentWord;
+                        logNewWord(currentWord, "PARTIAL");
+                        updateVisemesFromSyllables(partial);
                     }
                 }
             }
@@ -312,6 +348,14 @@ public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
         }
 
         // Construye el log y encola cada viseme en orden.
+        //
+        // <p><b>Sin colapso de repetidos:</b> a diferencia de la versión
+        // anterior (que usaba {@code lastQueued} para descartar visemes
+        // consecutivos iguales), aquí se encola <b>CADA</b> sílaba, incluidas
+        // las repetidas. La UI (ver {@code PngVoiceApp.tick}) muestra cada
+        // viseme con una duración mínima, de modo que las sílabas repetidas
+        // (p. ej. "ba-ja-ban" → A A A) se suman en tiempo y producen la
+        // <b>ilusión de un sonido sostenido</b>.
         StringBuilder sb = new StringBuilder();
         Viseme lastViseme = Viseme.NEUTRAL;
         for (String syl : syllables) {
@@ -319,14 +363,39 @@ public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
             if (sb.length() > 0) sb.append(" ");
             sb.append("'").append(syl).append("'→").append(v);
             lastViseme = v;
-            if (v != lastQueued) {
-                lastQueued = v;
-                visemeQueue.offer(v);
-            }
+            visemeQueue.offer(v);
         }
 
         this.current = lastViseme;
         LOG.info("[Vosk {}] SYLLABLES '{}' → [{}]", System.currentTimeMillis(), lastWord, sb);
+    }
+
+    /**
+     * Registra en el log que se ha detectado una <b>nueva palabra</b> reconocida.
+     *
+     * <p>Sirve para diagnosticar por qué la imagen de pronunciación <b>no</b> se
+     * actualiza: si no ves líneas {@code [VOSK] WORD} en el log, el reconocedor
+     * no está produciendo texto nuevo (Vosk no reconoce nada o el texto parcial
+     * no avanza); si las ves pero la imagen sigue quieta, el fallo está aguas
+     * abajo (cola / UI).
+     *
+     * <p>Evita loguear dos veces la misma palabra consecutiva (p. ej. cuando
+     * una palabra llega por PARTIAL y luego se confirma por FINAL).
+     *
+     * @param word   palabra reconocida (puede ser {@code null} o vacía)
+     * @param source origen: {@code "PARTIAL"} (texto en curso) o {@code "FINAL"} (frase terminada)
+     */
+    private void logNewWord(String word, String source) {
+        if (word == null || word.isBlank()) {
+            return;
+        }
+        String w = word.trim();
+        if (w.equals(lastRecognizedWord)) {
+            return; // misma palabra que la anterior: no repetir
+        }
+        lastRecognizedWord = w;
+        LOG.info("[VOSK] WORD {} → '{}' ({} ms)",
+                source, w, System.currentTimeMillis());
     }
 
     /**

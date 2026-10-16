@@ -98,15 +98,23 @@ public enum Viseme {
     /**
      * Devuelve el viseme correspondiente a una letra.
      *
+     * <p>Regla de default: si la letra <b>sí</b> es una letra del alfabeto pero
+     * no cae en ningún grupo de viseme asignado, se usa {@link #S} como
+     * viseme por defecto (una posición de boca "intermedia" que funciona para
+     * cualquier consonante no clasificada). Solo los caracteres que <b>no</b>
+     * son letras (puntuación, espacios, dígitos, etc.) devuelven
+     * {@link #NEUTRAL}, porque no representan una forma de boca real.
+     *
      * @param letter letra arbitraria (mayúscula o minúscula)
-     * @return viseme del grupo, o {@link #NEUTRAL} si la letra no está asignada
+     * @return viseme del grupo, {@link #S} si es una letra sin grupo asignado,
+     *         o {@link #NEUTRAL} si no es una letra
      */
     public static Viseme fromLetter(char letter) {
         if (!Character.isLetter(letter)) {
             return NEUTRAL;
         }
         Viseme v = LETTER_TO_VISEME.get(Character.toLowerCase(letter));
-        return v != null ? v : NEUTRAL;
+        return v != null ? v : S;
     }
 
     /**

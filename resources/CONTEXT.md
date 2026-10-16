@@ -61,11 +61,9 @@ Sin internet, sin servidores. Todo local.
 │                                                                             │
 │  AnimationTimer.handle(now):                                               │
 │      state  = audioCapture.getState()       // VolumeState(level, norm)    │
-│      viseme = voskRecognizer.pollViseme()   // Viseme o null              │
-│      ──► AvatarRenderer.render(canvas, viseme, level, config)              │
-│              └──► config.visemeImages.get(viseme.name())                   │
-│                  ├── tiene imagen? → drawImage()                           │
-│                  └── no?           → drawPlaceholder() (formas Canvas)     │
+│      tick(): drena cola del reconocedor → playbackQueue (fila de sílabas)  │
+│              avanza la fila: cada sílaba ~syllableMinMs (default 80 ms)    │
+│              ──► applyViseme(viseme)  (imagen por viseme, o NEUTRAL)       │
 │                                                                             │
 │  UI: ProgressBar (volumen), Label (viseme), Label (estado)                 │
       Botones: Iniciar/Detener micrófono, Vibración (ON/OFF), Panel de letras│
@@ -157,8 +155,9 @@ AvatarRenderer
 | `VolumeAnalyzer.smoothedDbfs` | `double` | solo audio thread | No (EMA stateful) |
 | `VoskRecognizer.current` | `volatile Viseme` | escrito por audio, leído por FX | No |
 | `VoskRecognizer.visemeQueue` | `ConcurrentLinkedQueue<Viseme>` | escrito audio, leído FX | No (cola) |
-| `VoskRecognizer.lastQueued` | `volatile Viseme` | audio thread | No |
-| `PngVoiceApp.lastDisplayedViseme` | `Viseme` | solo FX thread | No |
+| `PngVoiceApp.playbackQueue` | `ArrayDeque<Viseme>` | solo FX thread | No (fila de reproducción) |
+| `PngVoiceApp.lastSpoken` | `Viseme` | solo FX thread | No |
+| `PngVoiceApp.lastFinishNanos` | `long` | solo FX thread | No (marca fin de fila) |
 | `AppConfig` | POJO mutable | solo FX thread (config) | No |
 | `Avatar`, `SpriteSheet` | inmutables | — | Sí |
 
@@ -206,6 +205,8 @@ Archivo: `config/app.json` (creado automáticamente con defaults si no existe).
 | `backgroundColor` | `#00FF00` | Fondo croma-key |
 | `visemeImages` | `{}` | Mapa viseme→ruta PNG (placeholder si vacío) |
 | `vibrationEnabled` | `true` | Vibración (agitamiento) del avatar al hablar: ON/OFF (botón en la UI). **No afecta al grito**: cuando el avatar está en un episodio de grito activo, la imagen SIEMPRE vibra aunque el botón esté OFF (ver `updateImageWiggle`). |
+| `syllableMinMs` | `80` | Duración mínima (ms) de **cada sílaba** en la fila de reproducción antes de avanzar a la siguiente. Más bajo = boca más fluida (más sílabas/s). Se refresca en `startMic()` → campo `PngVoiceApp.syllableMinMs`. |
+| `silenceHoldMs` | `200` | Hold (ms) que se mantiene la última sílaba antes de volver a NEUTRAL. **Si la siguiente sílaba llega dentro de este tiempo, el avatar NO vuelve a NEUTRAL**: conserva la última boca hasta que llegue la siguiente (movimiento continuo, sin "parpadeo" a boca cerrada). Solo las pausas reales (> hold) cierran la boca. 200 ms cubre las pausas típicas entre sílabas/palabras (~80–160 ms). Se refresca en `startMic()` → campo `PngVoiceApp.silenceHoldMs`. |
 
 ---
 
@@ -223,6 +224,13 @@ Archivo: `config/app.json` (creado automáticamente con defaults si no existe).
 | **EMA smoothing en VolumeAnalyzer** | Evita que el avatar "parpadee" con picos de audio. Alfa configurable (0..1). |
 | **AudioFrameProcessor como @FunctionalInterface** | Desacopla AudioCapture del reconocedor. AudioCapture no sabe si es Vosk, Kaldi, o nada. |
 | **`sampleRate` en AppConfig, no hardcoded** | Si el usuario cambia de modelo Vosk (p. ej. modelo a 8 kHz), solo cambia la config. |
+| **La imagen mostrada SIEMPRE corresponde a la letra de la sílaba reconocida** | `Viseme.fromLetter(c)` devuelve el viseme del grupo de esa letra; si la letra es del alfabeto pero **no** cae en ningún grupo asignado, el default es **`S`** (posición de boca intermedia que funciona para cualquier consonante no clasificada). Solo caracteres no-letter (puntuación, espacios, dígitos) devuelven `NEUTRAL`. Así "siempre se muestra la imagen de la letra": A→A, E→E, …, y cualquier consonante extra→S. |
+| **No se muestran visemes aleatorios cuando Vosk no reconoce palabra** | La UI (`PngVoiceApp.tick`) ya **no** usa el fallback aleatorio por volumen (`TALKING`/`pickTalkingViseme` eliminados). Solo consume visemes de la cola del reconocedor (`pollNextViseme()`). Si la cola está vacía (Vosk no ha identificado sílabas), **no se muestra ninguna imagen nueva**: se conserva la imagen actual (normalmente `NEUTRAL`). Las imágenes solo aparecen cuando hay sílabas identificadas en la cola. |
+| **La boca se anima SÍLABA A SÍLABA (no solo la última)** | Antes `tick()` drenaba toda la cola y conservaba **solo el último** viseme (las intermedias se descartaban en el mismo frame; la boca solo mostraba la última sílaba de cada palabra). Ahora `tick()` drena la cola del reconocedor hacia una **fila de reproducción** (`playbackQueue`, `ArrayDeque<Viseme>`) y avanza por ella mostrando **cada** sílaba al menos `syllableMinMs` ms antes de pasar a la siguiente. El default bajó de 150 a **80 ms** (~12 sílabas/s, más rápido que el habla natural) para que el cambio de imagen sea **fluido** y no se vea a "pulsos". Es **configurable** en `app.json` (`syllableMinMs`). Así "gobierno" → O → E → O se ve completo. |
+| **Las sílabas repetidas dan ilusión de sonido sostenido** | Al quitar el colapso `lastQueued` en `VoskRecognizer.updateVisemesFromSyllables()`, **todas** las sílabas se encolan (incluidas las repetidas). Como cada sílaba se muestra `SYLLABLE_MIN_MS` ms, las repetidas (p. ej. "bajaban" → A A A) **suman duración** en pantalla y producen la sensación de un sonido sostenido, en vez de colapsar a 1 único A. |
+| **Hold de silencio arranca al terminar la última sílaba** | Cuando `playbackQueue` queda vacía, la última sílaba hablada (`lastSpoken`) se mantiene `silenceHoldMs` ms a partir de `lastFinishNanos` (marco en que la fila se vació) y luego vuelve a `NEUTRAL`. **Clave para naturalidad:** si la siguiente sílaba llega **dentro** de ese hold, el avatar **no** vuelve a NEUTRAL — conserva la última boca hasta que llegue la nueva. Así las sílabas/palabras cercanas se ven **continuas**, sin "parpadeo" a boca cerrada. El default subió de 50 a **200 ms** para cubrir las pausas típicas entre sílabas/palabras (~80–160 ms) sin saltar a NEUTRAL, dejando que solo las pausas reales (>200 ms) cierren la boca. Es **configurable** en `app.json` (`silenceHoldMs`). El `isTalking` (para vibración/grito) se maneja por la cola, ya no por el nivel de volumen. |
+| **`tick` protege contra `peekFirst()` null al vaciar la cola (bug NPE)** | En el paso de avance de la fila, tras `playbackQueue.pollFirst()` (la sílaba actual terminó) la cola **puede quedar vacía** si era la última. Leer `currentVisible = playbackQueue.peekFirst()` en ese caso devuelve `null` y tumba el hilo JavaFX con `NullPointerException` en `displayName` (switch sobre `v.ordinal()`). Ahora, tras el `poll`, se comprueba `playbackQueue.isEmpty()`: si quedó vacía se usa `lastSpoken` (última sílaba) y se marca `lastFinishNanos`/`isTalking=false` (arranca el hold de silencio); solo si aún hay elementos se hace `peekFirst()`. |
+| **Al drenar sílabas a una fila vacía se reinicia el reloj de la fila (bug: sílabas saltadas)** | Antes, cuando una sílaba nueva entraba en `playbackQueue` **vacía**, `visibleImageStartNanos` seguía con el timestamp de la última sílaba de hace un rato. Al entrar el paso de avance, `elapsedMs(now, visibleImageStartNanos) >= syllableMinMs` era **true** (siempre: entre sílabas pasan cientos de ms) y `pollFirst()` **consumía la sílaba nueva en el mismo frame sin mostrarla**. Efecto visible (confirmado por logs): las sílabas solitarias (p. ej. "de"→E) desaparecían sin cambiar la imagen, y en las de varias sílabas solo se veía la última ("vice"→I E → solo E). Solución: en `tick()`, al drenar con `queueWasEmpty` se hace `visibleImageStartNanos = now` y `isTalking = true`, para que la primera sílaba nueva tenga sus `syllableMinMs` completos. |
 | **El grito SIEMPRE vibra, sin importar el botón "Vibración"** | El botón solo controla el agitamiento del habla normal. En `updateImageWiggle(long)` la condición de "quieto" es `!vibrationEnabled && !inScream`, y el `target` de amplitud es `(isTalking \|\| inScream) ? 1.0 : 0.0`. Así el grito se siente "fuerte" de forma consistente aunque el usuario apague la vibración de habla normal. |
 | **Grito disparado por volumen NORMALIZADO al tope** | El viseme `GRITO` solo aparece cuando el volumen normalizado (0..1 de `VolumeAnalyzer.getNormalizedLevel()`) alcanza `GRITO_NORM_THRESHOLD = 0.85` (~-20 dBFS, escala completa). Antes se usaba `level >= 3`, pero el nivel 3 ya se alcanza desde `-28 dBFS` (habla normal), así que el grito salía "aleatoriamente" al hablar. Con el umbral normalizado el grito solo aparece al llegar al tope de decibeles. Solo se muestra si el usuario asignó una imagen a `GRITO` y el avatar está hablando; si no, conserva el viseme normal. |
 
@@ -308,3 +316,15 @@ mvn clean package -Dskip.jpackage=true
 > Al llegar `FINAL` se reinicia `lastLoggedText=""` para que la siguiente
 > frase (aunque repita la misma palabra) se loguee de nuevo.
 > `updateViseme()` ya no loguea (solo mapea y encola).
+>
+> **Logging diagnóstico de la imagen de pronunciación** (para saber cuándo la
+> imagen SÍ/NO se actualiza):
+> - `VoskRecognizer.logNewWord()` loguea cada **nueva palabra** detectada
+>   (guard `lastRecognizedWord`):
+>   `[VOSK] WORD PARTIAL → 'programa' (… ms)` / `[VOSK] WORD FINAL → 'programa' (… ms)`.
+> - `PngVoiceApp.applyViseme()` loguea solo cuando la **imagen visible cambia**
+>   (guard `lastAppliedViseme`) y si el viseme tiene imagen asignada:
+>   `[UI] IMG → A | imagen asignada: SÍ/NO (… ms)`.
+> - **Interpretación:** sin líneas `[VOSK] WORD` → el reconocedor no produce
+>   texto nuevo. Con `WORD` pero sin `[UI] IMG` → los visemes no llegan a
+>   consumirse o falta imagen asignada a ese viseme.

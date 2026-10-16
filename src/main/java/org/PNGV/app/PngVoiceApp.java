@@ -49,7 +49,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -74,24 +76,42 @@ public class PngVoiceApp extends javafx.application.Application {
      */
     private static final double AVATAR_SIZE = 640;
 
-    /** Visemes de "hablando" que se rotan aleatoriamente cuando hay volumen. */
-    private static final Viseme[] TALKING = {
-            Viseme.A, Viseme.E, Viseme.I, Viseme.O, Viseme.U,
-            Viseme.BMP, Viseme.FV, Viseme.L, Viseme.S};
+    // ---- Ritmo de los cambios de imagen (tiempo real) ----
+    /**
+     * Duración (ms) que se mantiene la <b>última</b> imagen hablada antes de
+     * volver a NEUTRAL al llegar el silencio. Debe ser lo suficientemente
+     * larga para que el usuario la perciba (~12 frames a 60 fps) pero lo
+     * suficientemente corta para no retrasar la siguiente palabra.
+     *
+     * <p>Es el <b>default</b>; el valor efectivo se lee de la config
+     * ({@code silenceHoldMs}) al iniciar el micrófono y se guarda en el campo
+     * de instancia {@link #silenceHoldMs}.
+     */
+    private static final long SILENCE_HOLD_MS = 50;
 
-    // ---- Ritmo de los cambios de imagen (para que se sienta una "plática") ----
     /**
-     * Duración (ms) que se mantiene la <b>primera</b> imagen al empezar a hablar
-     * y la <b>última</b> imagen antes de volver al silencio. Es el valor más
-     * alto: estas dos se ven "más lentas" (permanecen más tiempo).
+     * Duración mínima (ms) que se muestra <b>cada sílaba</b> (viseme) en la
+     * cola de reproducción.
+     *
+     * <p>Antes el {@link #tick} drenaba la cola entera y conservaba solo el
+     * <b>último</b> viseme: las sílabas intermedias de una palabra se
+     * descartaban en el mismo frame y la boca solo mostraba la última sílaba.
+     *
+     * <p>Ahora cada sílaba reconocida entra en una <b>fila de reproducción</b>
+     * y se muestra al menos {@code SYLLABLE_MIN_MS} ms antes de avanzar a la
+     * siguiente. Así la boca se anima <b>sílaba a sílaba</b> (p. ej.
+     * "gobierno" → O → E → O) y las sílabas repetidas (p. ej. "bajaban" →
+     * A A A) se suman en tiempo, dando la ilusión de un sonido sostenido.
+     *
+     * <p>El default 80 ms (~12 sílabas/s) es un poco más rápido que el habla
+     * natural (~150 ms) para que el cambio de imagen se sienta continuo y
+     * cercano a una persona pronunciando, sin "pulsos" entre sílaba y sílaba.
+     *
+     * <p>Es el <b>default</b>; el valor efectivo se lee de la config
+     * ({@code syllableMinMs}) al iniciar el micrófono y se guarda en el campo
+     * de instancia {@link #syllableMinMs}.
      */
-    private static final long FIRST_LAST_MS = 700;
-    /**
-     * Duración (ms) de las imágenes <b>intermedias</b> (entre la primera y la
-     * última). Es menor que {@link #FIRST_LAST_MS} pero mucho mayor que el
-     * cambio por frame (~16 ms), de modo que se aprecian sin "parpadear".
-     */
-    private static final long MIDDLE_MS = 200;
+    private static final long SYLLABLE_MIN_MS = 80;
 
     /**
      * Visemes (grupos de letras) que se muestran como imágenes propias.
@@ -165,6 +185,13 @@ public class PngVoiceApp extends javafx.application.Application {
      */
     private VoskRecognizer voskRecognizer;
     private Viseme lastViseme = Viseme.NEUTRAL;
+    /**
+     * Último viseme sobre el que se llamó {@link #applyViseme} con un cambio
+     * real. Se usa únicamente para el log de diagnóstico {@code [UI] IMG}:
+     * así solo se loguea cuando la imagen visible efectivamente cambia, sin
+     * saturar el log con los frames repetidos del AnimationTimer.
+     */
+    private Viseme lastAppliedViseme = null;
     private Path configPath;
     private final LetterLogger letterLogger = new LetterLogger();
 
@@ -173,10 +200,42 @@ public class PngVoiceApp extends javafx.application.Application {
     private Viseme currentVisible = Viseme.NEUTRAL;
     /** true si el avatar está en modo "hablando" (viseme != NEUTRAL). */
     private boolean isTalking = false;
-    /** true mientras la imagen visible es la primera de una "palabra" (se congela). */
-    private boolean isHoldingFirst = false;
     /** Marca (ns, AnimationTimer) de cuándo se fijó la imagen visible actual. */
     private long visibleImageStartNanos = 0L;
+
+    // ---- Fila de reproducción sílaba a sílaba (ver tick / drainToPlayback) ----
+    /**
+     * Cola de sílabas pendientes de mostrarse. Se rellena desde la cola del
+     * reconocedor y se avanza {@link #SYLLABLE_MIN_MS} ms por sílaba, de modo
+     * que cada una se vea en pantalla (en vez de descartar las intermedias).
+     * Solo la toca el hilo JavaFX.
+     */
+    private final Deque<Viseme> playbackQueue = new ArrayDeque<>();
+
+    // ---- Ritmo de los cambios de imagen (configurable desde app.json) ----
+    /**
+     * Duración mínima (ms) de cada sílaba en la fila de reproducción. Se
+     * inicializa con el default {@link #SYLLABLE_MIN_MS} y se refresca desde la
+     * config al iniciar el micrófono (ver {@link #startMic()}).
+     */
+    private long syllableMinMs = SYLLABLE_MIN_MS;
+    /**
+     * Hold de silencio (ms) tras la última sílaba antes de volver a NEUTRAL.
+     * Se refresca desde la config al iniciar el micrófono.
+     */
+    private long silenceHoldMs = SILENCE_HOLD_MS;
+
+    /**
+     * Última sílaba hablada (la más reciente mostrada). Se mantiene durante el
+     * {@link #SILENCE_HOLD_MS} de silencio antes de volver a NEUTRAL.
+     */
+    private Viseme lastSpoken = Viseme.NEUTRAL;
+    /**
+     * Marca (ns, AnimationTimer) del momento en que la fila de reproducción
+     * quedó vacía (terminó la última sílaba). A partir de aquí se cuenta el
+     * hold de silencio.
+     */
+    private long lastFinishNanos = 0L;
 
     // ---- Estado del grito (ver tick) ----
     /** true mientras el avatar está en un "episodio" de grito activo. */
@@ -432,82 +491,100 @@ public class PngVoiceApp extends javafx.application.Application {
     /**
      * Actualiza UI con el estado de volumen más reciente.
      *
-     * <p>Ritmo tipo "plática":
+     * <p>Estrategia <b>sílaba a sílaba</b>: cada frame se drena la cola del
+     * reconocedor hacia una <b>fila de reproducción</b> ({@link #playbackQueue})
+     * y se avanza por ella mostrando cada sílaba al menos
+     * {@link #SYLLABLE_MIN_MS} ms. Así la boca se anima sílaba a sílaba
+     * (p. ej. "gobierno" → O → E → O) en vez de descartar todas menos la
+     * última, y las sílabas repetidas suman duración (ilusión de sonido
+     * sostenido).
+     *
      * <ul>
-     *   <li>Al <b>empezar</b> a hablar se elige una <b>primera</b> imagen que
-     *       se mantiene durante {@link #FIRST_LAST_MS} (el valor más largo).</li>
-     *   <li>Mientras continúa el habla se rotan imágenes <b>intermedias</b> cada
-     *       {@link #MIDDLE_MS} (más lento que antes, pero menos que la primera/última).</li>
-     *   <li>La <b>última</b> imagen antes de volver al silencio también se
-     *       mantiene {@link #FIRST_LAST_MS}.</li>
-     *   <li>Al llegar a silencio se pasa a {@code NEUTRAL} inmediatamente.</li>
+     *   <li>Al hablar: cada sílaba de la fila se muestra ~{@link #SYLLABLE_MIN_MS} ms.</li>
+     *   <li>Al terminar la fila: la última sílaba se mantiene
+     *       {@link #SILENCE_HOLD_MS} ms antes de pasar a NEUTRAL.</li>
+     *   <li>Grito: si el volumen normalizado alcanza el umbral, se muestra
+     *       la imagen de grito por encima del viseme normal.</li>
      * </ul>
      *
-     * @param now marca de tiempo del {@link AnimationTimer} (ns), para medir
-     *            cuánto lleva la imagen visible actual.
+     * @param level      nivel de volumen 0-3 (no se usa para la boca, solo el
+     *                   grito usa el nivel normalizado)
+     * @param normalized volumen normalizado 0..1 (para el grito)
+     * @param now        marca de tiempo del {@link AnimationTimer} (ns)
      */
     private void tick(int level, double normalized, long now) {
-        boolean talking = level != 0;
-        boolean wasTalking = isTalking;
-        boolean firstFrame = !wasTalking && talking;   // borde silencio → habla
-        boolean lastFrame  = wasTalking && !talking;   // borde habla → silencio
-
-        if (firstFrame) {
-            // Empieza la "palabra": congelamos la primera imagen por FIRST_LAST_MS.
-            // Con reconocedor, la primera imagen sale de la cola de letras;
-            // si la cola está vacía se usa el fallback aleatorio por volumen.
-            currentVisible = nextVisemeOrPick(level);
-            isTalking = true;
-            isHoldingFirst = true;
-            visibleImageStartNanos = now;
-        } else if (talking) {
-            isTalking = true;
-            if (isHoldingFirst) {
-                // La primera imagen se mantiene; cuando termina su tiempo pasa
-                // a ritmo normal (MIDDLE_MS) y se rota.
-                if (elapsedMs(now, visibleImageStartNanos) >= FIRST_LAST_MS) {
-                    isHoldingFirst = false;
-                    currentVisible = nextVisemeOrPickDifferent(level, currentVisible);
-                    visibleImageStartNanos = now;
-                }
-            } else {
-                // Ritmo normal: rotamos cada MIDDLE_MS, sin repetir la misma imagen.
-                if (elapsedMs(now, visibleImageStartNanos) >= MIDDLE_MS) {
-                    currentVisible = nextVisemeOrPickDifferent(level, currentVisible);
-                    visibleImageStartNanos = now;
-                }
+        // ---- 1) Drenar la cola del reconocedor → fila de reproducción ----
+        // Se drena SIEMPRE (también en silencio) para no dejar sílabas
+        // "atrapadas" en la cola. Cada sílaba reconocida entra en
+        // {@link #playbackQueue} y se mostrará al menos SYLLABLE_MIN_MS ms
+        // (ver paso 2). Así la boca se anima sílaba a sílaba en vez de
+        // descartar todas menos la última.
+        boolean queueWasEmpty = playbackQueue.isEmpty();
+        int drained = 0;
+        Viseme first;
+        while ((first = pollNextViseme()) != null) {
+            playbackQueue.offer(first);
+            drained++;
+        }
+        if (drained > 0) {
+            // Si la fila estaba vacía y ahora tiene sílabas nuevas, arranca el
+            // reloj de la primera desde AHORA. Si no lo hiciéramos,
+            // {@link #visibleImageStartNanos} seguiría con el timestamp de la
+            // última sílaba de hace un rato y, al entrar el paso 2,
+            // {@code elapsedMs >= syllableMinMs} sería true y se consumiría la
+            // sílaba nueva EN EL MISMO FRAME sin llegar a mostrarse. Eso era
+            // la causa de que las sílabas solitarias (p. ej. "de"→E)
+            // desaparecieran sin cambiar la imagen y de que en las de varias
+            // sílabas solo se viera la última.
+            if (queueWasEmpty) {
+                visibleImageStartNanos = now;
+                isTalking = true;
             }
-        } else if (lastFrame) {
-            // Acaba de llegar el silencio: la última imagen hablada se muestra
-            // FIRST_LAST_MS más (ya está en pantalla) y luego NEUTRAL.
-            isTalking = false;
-            isHoldingFirst = false;
-            // currentVisible se mantiene; se volverá a aplicar al terminar el
-            // "hold" final (ver rama de silencio abajo).
-        } else {
-            // Silencio continuo.
-            isTalking = false;
-            isHoldingFirst = false;
+            // Log de diagnóstico: cuántas sílabas llegaron a la fila en este
+            // frame. Si ves [VOSK] WORD pero NUNCA [UI] DRAIN, la cola no se
+            // está consumiendo (bug de threading / voskRecognizer nulo).
+            LOG.info("[UI] DRAIN → {} sílaba(s) en la fila, primera: {}",
+                    drained, playbackQueue.peekFirst());
         }
 
-        // ---- Decisión de qué imagen mostrar en este frame ----
-        Viseme toShow;
-        if (isTalking) {
-            toShow = currentVisible;
-        } else {
-            // Silencio: la "última" imagen hablada sigue visible durante un
-            // hold final (FIRST_LAST_MS) antes de pasar a NEUTRAL.
-            long held = elapsedMs(now, visibleImageStartNanos);
-            if (lastFrame && held < FIRST_LAST_MS) {
-                toShow = currentVisible;   // la última imagen hablada
-            } else {
-                toShow = Viseme.NEUTRAL;
-                if (lastFrame) {
-                    // Acaba de terminar el hold final: reiniciamos el reloj
-                    // para que la próxima "palabra" empiece con su primera imagen.
-                    visibleImageStartNanos = now;
-                }
+        // ---- 2) Avanzar la fila de reproducción sílaba a sílaba ----
+        // Cada sílaba se muestra al menos SYLLABLE_MIN_MS ms antes de pasar a
+        // la siguiente. Las sílabas repetidas (mismo viseme) suman duración →
+        // ilusión de sonido sostenido. Al terminar la fila, la última sílaba
+        // se mantiene SILENCE_HOLD_MS ms y luego se vuelve a NEUTRAL.
+        if (!playbackQueue.isEmpty()) {
+            isTalking = true;                       // el avatar está "hablando"
+            if (elapsedMs(now, visibleImageStartNanos) >= syllableMinMs) {
+                playbackQueue.pollFirst();          // la sílaba actual terminó
+                visibleImageStartNanos = now;       // arranca la siguiente
             }
+            // Cuidado: el poll anterior puede haber vaciado la cola (era la
+            // última sílaba). En ese caso peekFirst() devolvería null y
+            // tumbaría el hilo JavaFX (NPE en displayName). Si la cola quedó
+            // vacía, caemos al caso de silencio/última sílaba hablada.
+            if (playbackQueue.isEmpty()) {
+                isTalking = false;
+                lastFinishNanos = now;
+                currentVisible = lastSpoken;        // la última sílaba hablada
+            } else {
+                currentVisible = playbackQueue.peekFirst();
+            }
+        } else {
+            // Fila vacía: se acaba de terminar la última sílaba (o nunca hubo
+            // habla). Marca el fin para arrancar el hold de silencio.
+            if (isTalking) {
+                isTalking = false;
+                lastFinishNanos = now;
+            }
+            long held = elapsedMs(now, lastFinishNanos);
+            if (held < silenceHoldMs) {
+                currentVisible = lastSpoken;        // la última sílaba hablada
+            } else {
+                currentVisible = Viseme.NEUTRAL;
+            }
+        }
+        if (currentVisible != lastSpoken) {
+            lastSpoken = currentVisible;
         }
 
         // Grito: se muestra SOLO cuando el micrófono llega al <b>tope</b> de
@@ -544,15 +621,12 @@ public class PngVoiceApp extends javafx.application.Application {
                 currentScream = pick;
                 inScream = true;
             }
-            toShow = currentScream;
+            currentVisible = currentScream;   // el grito se muestra por encima
         } else {
             inScream = false;
         }
 
-        // Solo redibujamos si cambió la imagen visible (evita trabajo inútil).
-        if (toShow != currentVisible) {
-            currentVisible = toShow;
-        }
+        // Aplicar la imagen del viseme elegido en este frame.
         applyViseme(currentVisible);
         volumeBar.setProgress(normalized);
         visemeLabel.setText("Viseme: " + currentVisible);
@@ -575,67 +649,23 @@ public class PngVoiceApp extends javafx.application.Application {
         return pool;
     }
 
-    /** Elige un viseme de "hablando" aleatorio según el nivel de volumen. */
-    private Viseme pickTalkingViseme(int level) {
-        int idx = Math.min(TALKING.length - 1, random.nextInt(1 + level));
-        return TALKING[idx];
-    }
-
-    /** Elige un viseme de "hablando" distinto al que ya está visible (para no repetir). */
-    private Viseme pickDifferentTalkingViseme(int level, Viseme avoid) {
-        int idx = Math.min(TALKING.length - 1, random.nextInt(1 + level));
-        Viseme v = TALKING[idx];
-        if (v == avoid) {
-            // Si por azar repite, fuerza otro distinto (solo si hay más de uno).
-            if (TALKING.length > 1) {
-                do {
-                    v = TALKING[random.nextInt(TALKING.length)];
-                } while (v == avoid);
-            }
-        }
-        return v;
-    }
-
     /**
-     * Devuelve el siguiente viseme <b>de la cola del reconocedor</b> (en orden de
-     * aparición). Si no hay reconocedor o la cola está vacía, cae al fallback
-     * aleatorio por volumen ({@link #pickTalkingViseme(int)}).
+     * Extrae (y elimina) el siguiente viseme <b>de la cola del reconocedor</b>,
+     * en orden de aparición de las sílabas reconocidas.
      *
-     * <p>La cola solo se consume (poll) cuando hay algo realmente pendiente, para
-     * no "quemar" letras reconocidas cuando el fallback ya es suficiente.
+     * <p>A diferencia del antiguo fallback aleatorio por volumen, este método
+     * <b>SOLO</b> devuelve visemes que realmente provienen de sílabas
+     * identificadas por Vosk. Si no hay reconocedor o la cola está vacía,
+     * devuelve {@code null} y la UI <b>no</b> muestra ninguna imagen nueva
+     * (conserva la imagen actual, normalmente {@link Viseme#NEUTRAL}).
      *
-     * @param level nivel de volumen (para el fallback)
-     * @return el viseme a mostrar
+     * @return el siguiente viseme reconocido, o {@code null} si no hay ninguno
      */
-    private Viseme nextVisemeOrPick(int level) {
+    private Viseme pollNextViseme() {
         if (voskRecognizer != null) {
-            Viseme v = voskRecognizer.pollViseme();
-            if (v != null) {
-                return v;
-            }
+            return voskRecognizer.pollViseme();
         }
-        return pickTalkingViseme(level);
-    }
-
-    /**
-     * Devuelve el siguiente viseme <b>de la cola del reconocedor</b>, evitando
-     * repetir el que ya está visible. Si la cola no tiene un viseme distinto
-     * (o no hay reconocedor), cae al fallback aleatorio por volumen.
-     *
-     * @param level  nivel de volumen (para el fallback)
-     * @param avoid  viseme que ya está visible (para no repetirlo)
-     * @return el viseme a mostrar
-     */
-    private Viseme nextVisemeOrPickDifferent(int level, Viseme avoid) {
-        if (voskRecognizer != null) {
-            Viseme v = voskRecognizer.pollViseme();
-            if (v != null && v != avoid) {
-                return v;
-            }
-            // Si el viseme de la cola repite el actual, se descarta (ya se
-            // consumió) y se usa el fallback; la cola se irá drenando sola.
-        }
-        return pickDifferentTalkingViseme(level, avoid);
+        return null;
     }
 
     /** Milisegundos transcurridos desde una marca de tiempo del AnimationTimer. */
@@ -648,6 +678,18 @@ public class PngVoiceApp extends javafx.application.Application {
     private void applyViseme(Viseme v) {
         // Registrar en el logger de letras (usa System.nanoTime como referencia)
         letterLogger.record(v, System.nanoTime());
+
+        // Log de diagnóstico: registrar SOLO cuando la imagen visible cambia,
+        // para poder ver cuándo la imagen de pronunciación realmente se
+        // actualiza (y detectar cuándo NO lo hace). Si ves líneas [VOSK] WORD
+        // en el log pero no [UI] IMG, el fallo está entre el reconocedor y la
+        // cola (los visemes no llegan a consumirse / no hay imagen asignada).
+        if (v != lastAppliedViseme) {
+            boolean hasImage = visemeImages.containsKey(v);
+            LOG.info("[UI] IMG → {} | imagen asignada: {} | t={} ms",
+                    v, hasImage ? "SÍ" : "NO", System.currentTimeMillis());
+            lastAppliedViseme = v;
+        }
         if (rightLetterLabel != null) {
             rightLetterLabel.setText("Letra actual: " + displayName(v));
         }
@@ -872,6 +914,10 @@ public class PngVoiceApp extends javafx.application.Application {
     private void startMic() {
         try {
             AppConfig config = new ConfigLoader().load(configPath);
+            // Refrescar el ritmo de cambio de imagen desde la config (app.json),
+            // con sanity clamps para que valores inválidos no tumben la animación.
+            syllableMinMs = Math.max(1, config.getSyllableMinMs());
+            silenceHoldMs = Math.max(0, config.getSilenceHoldMs());
             VolumeAnalyzer analyzer = new VolumeAnalyzer(config);
 
             // Paso 1: intentar conectar VoskRecognizer si el modelo existe.
