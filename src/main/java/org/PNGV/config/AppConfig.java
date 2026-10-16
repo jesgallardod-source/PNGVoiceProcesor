@@ -35,8 +35,17 @@ public class AppConfig {
     /** Alfa del suavizado exponencial (0..1). 0.5 = muy reactivo, 0.9 = muy suave. */
     private double smoothing = 0.5;
 
-    /** Muestra por buffer de captura (16-bit). 1024 es un buen valor. */
-    private int bufferFrames = 1024;
+    /**
+     * Muestra por buffer de captura (16-bit).
+     * <p>256 = ~16 ms de latencia a 16 kHz (reducción de latencia, Fase 2.4 del
+     * Plan de Mejora Vosk). Valores menores = partial results más frecuentes =
+     * el reconocedor reacciona antes y mejor granularidad temporal.
+     *
+     * <p>Es un compromiso: buffer más pequeño = más buffers/segundo (un poco más
+     * de CPU en el hilo de audio) a cambio de latencia menor. 256 es el
+     * mínimo razonable sin saturar la CPU.
+     */
+    private int bufferFrames = 256;
     /**
      * Frecuencia de muestreo. <b>Debe coincidir con la frecuencia con la que
      * está entrenado el modelo de Vosk</b> (ver {@code conf/mfcc.conf} del
@@ -49,6 +58,29 @@ public class AppConfig {
 
     /** Ruta al modelo de Vosk (p. ej. assets/models/vosk-model-small-es-0.42). */
     private String modelPath = "assets/models/vosk-model-small-es-0.42";
+
+    /**
+     * Número de alternativas (n-best) que pide a Vosk por cada resultado.
+     *
+     * <p>Con nbest &gt; 1, Vosk devuelve un JSON con campo
+     * {@code "alternatives": [...]} que contiene varias hipótesis ordenadas
+     * por confianza. El reconocedor elige la de mayor confianza para mejorar
+     * la coherencia del texto reconocido.
+     *
+     * <p><b>Latencia (Fase "reducción de latencia"):</b> el coste de
+     * reconocimiento de Vosk crece <b>linealmente</b> con nbest: con nbest=5
+     * se calculan 5 hipótesis por buffer en vez de 1, que es el mayor gasto
+     * de CPU del pipeline y la principal causa de que los resultados
+     * "se tarden" en aparecer en los logs. Como el uso actual (viseme por la
+     * última palabra de la hipótesis ganadora) no aprovecha las alternativas
+     * extra, el default se baja a <b>1</b> para minimizar la latencia.
+     *
+     * <p>Si se necesita mayor coherencia de texto (p. ej. para transcripción),
+     * se puede subir a 3-5 aceptando más latencia por buffer.
+     *
+     * <p>Valor por defecto: <b>1</b>. Mínimo permitido: 1.
+     */
+    private int nbest = 1;
 
     /** Ruta al avatar activo (hoja de sprites PNG). */
     private String activeAvatar = "assets/avatars/avatar1.png";
@@ -103,6 +135,9 @@ public class AppConfig {
 
     public String getModelPath() { return modelPath; }
     public void setModelPath(String modelPath) { this.modelPath = modelPath; }
+
+    public int getNbest() { return nbest; }
+    public void setNbest(int nbest) { this.nbest = Math.max(1, nbest); }
 
     public String getActiveAvatar() { return activeAvatar; }
     public void setActiveAvatar(String activeAvatar) { this.activeAvatar = activeAvatar; }

@@ -73,7 +73,7 @@ Sin internet, sin servidores. Todo local.
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Latencia objetivo:** < 80 ms (buffer de 1024 frames a 16 kHz = ~64 ms).
+**Latencia objetivo:** < 50 ms (buffer de 256 frames a 16 kHz = ~16 ms + VAD instantáneo + nbest=1).
 
 > **Nota importante (formato de salida de Vosk):** `Recognizer.getResult()` y
 > `Recognizer.getPartialResult()` **no devuelven texto plano, devuelven JSON**:
@@ -155,6 +155,7 @@ AvatarRenderer
 |----------|------|--------|-----------|
 | `AudioCapture.stateRef` | `AtomicReference<VolumeState>` | escrito por audio, leído por FX | Sí (record inmutable) |
 | `VolumeAnalyzer.smoothedDbfs` | `double` | solo audio thread | No (EMA stateful) |
+| `VolumeAnalyzer.lastInstantDbfs` | `double` | solo audio thread | No (valor instantáneo para VAD) |
 | `VoskRecognizer.current` | `volatile Viseme` | escrito por audio, leído por FX | No |
 | `VoskRecognizer.visemeQueue` | `ConcurrentLinkedQueue<Viseme>` | escrito audio, leído FX | No (cola) |
 | `VoskRecognizer.lastQueued` | `volatile Viseme` | audio thread | No |
@@ -179,8 +180,9 @@ Archivo: `config/app.json` (creado automáticamente con defaults si no existe).
   "thresholdMid": -40.0,
   "thresholdHigh": -28.0,
   "smoothing": 0.5,
-  "bufferFrames": 1024,
+  "bufferFrames": 256,
   "sampleRate": 16000,
+  "nbest": 1,
   "modelPath": "assets/models/vosk-model-small-es-0.42",
   "activeAvatar": "assets/avatars/avatar1.png",
   "backgroundColor": "#00FF00",
@@ -199,8 +201,9 @@ Archivo: `config/app.json` (creado automáticamente con defaults si no existe).
 | `thresholdMid` | -40 dBFS | Por debajo = nivel 1 (bajo) |
 | `thresholdHigh` | -28 dBFS | Por debajo = nivel 2 (medio), si no 3 (alto) |
 | `smoothing` | 0.5 | Alfa EMA. 0=reactivo, 1=inerte |
-| `bufferFrames` | 1024 | Samples por buffer (~64 ms a 16 kHz) |
+| `bufferFrames` | **256** | Samples por buffer (~16 ms a 16 kHz). Historial: 1024→512 (Fase 2.4)→**256** (reducción de latencia). Buffer más pequeño = el driver entrega audio antes = el primer resultado de Vosk llega antes. |
 | `sampleRate` | 16000 | **Debe ser 16000** (requisito del modelo Vosk) |
+| `nbest` | **1** | Nº de alternativas (n-best) que pide a Vosk. **Reducido de 5→1** para minimizar latencia: el coste de Vosk crece linealmente con nbest y el uso actual (viseme por última palabra) no aprovecha las alternativas extra. Subir a 3-5 solo si se necesita mayor coherencia de texto. |
 | `modelPath` | `assets/models/vosk-model-small-es-0.42` | Ruta al modelo Vosk |
 | `activeAvatar` | `assets/avatars/avatar1.png` | Ruta sprite sheet (no usado aún) |
 | `backgroundColor` | `#00FF00` | Fondo croma-key |
@@ -225,6 +228,7 @@ Archivo: `config/app.json` (creado automáticamente con defaults si no existe).
 | **`sampleRate` en AppConfig, no hardcoded** | Si el usuario cambia de modelo Vosk (p. ej. modelo a 8 kHz), solo cambia la config. |
 | **El grito SIEMPRE vibra, sin importar el botón "Vibración"** | El botón solo controla el agitamiento del habla normal. En `updateImageWiggle(long)` la condición de "quieto" es `!vibrationEnabled && !inScream`, y el `target` de amplitud es `(isTalking \|\| inScream) ? 1.0 : 0.0`. Así el grito se siente "fuerte" de forma consistente aunque el usuario apague la vibración de habla normal. |
 | **Grito disparado por volumen NORMALIZADO al tope** | El viseme `GRITO` solo aparece cuando el volumen normalizado (0..1 de `VolumeAnalyzer.getNormalizedLevel()`) alcanza `GRITO_NORM_THRESHOLD = 0.85` (~-20 dBFS, escala completa). Antes se usaba `level >= 3`, pero el nivel 3 ya se alcanza desde `-28 dBFS` (habla normal), así que el grito salía "aleatoriamente" al hablar. Con el umbral normalizado el grito solo aparece al llegar al tope de decibeles. Solo se muestra si el usuario asignó una imagen a `GRITO` y el avatar está hablando; si no, conserva el viseme normal. |
+| **Con Vosk activo, la imagen SOLO cambia si hay texto reconocido** | Antes, en `PngVoiceApp.tick()` cualquier sonido con `level != 0` entraba en modo "hablando" y, al no haber visemes en la cola, caía al **fallback aleatorio** `pickTalkingViseme(level)` (elige un viseme al azar). Eso hacía que la imagen "bailara" con ruido/eco aunque Vosk no reconociera nada. Ahora `nextVisemeOrPick()` / `nextVisemeOrPickDifferent()` devuelven **`null`** (no cambiar la imagen) cuando hay reconocedor y la cola está vacía o el viseme coincide con el actual. `tick()` solo actualiza `currentVisible`/`visibleImageStartNanos` cuando el resultado es no-null. El fallback aleatorio por volumen **solo** se usa cuando **no** hay reconocedor (`voskRecognizer == null`, modo "volumen"). Así la imagen solo cambia cuando Vosk reconoce texto real. |
 
 ---
 
@@ -285,7 +289,15 @@ mvn clean package -Dskip.jpackage=true
 
 ---
 
-## 11. Tests existentes
+## 11. Planes activos
+
+| Documento | Descripción |
+|-----------|-------------|
+| `resources/PLAN_MEJORAR_RECONOCIMIENTO_VOSK.md` | Plan paso a paso (con checkboxes) para mejorar el reconocimiento de letras con Vosk y la sincronización letra→viseme. Incluye: diagnóstico, modelo mejor, `getPartialJson()`, segmentación silábica, `VisemeTimeline`, vocal dominante, thread safety, tests. |
+
+---
+
+## 12. Tests existentes
 
 | Clase | Cubre |
 |-------|-------|
@@ -294,3 +306,122 @@ mvn clean package -Dskip.jpackage=true
 | `ConfigLoaderTest` (5 tests) | Save/load round-trip, defaults, custom values |
 | `AvatarRendererTest` (6 tests) | Placeholder rendering, estado, viseme→nombre |
 | `VoskRecognizerTest` (9 tests) | `extractText`: parseo JSON→texto de Vosk (`text`/`partial`, vacíos, texto plano, JSON inválido) |
+
+> **Fase 1.1 (PLAN_MEJORAR_RECONOCIMIENTO_VOSK) — COMPLETADA:**
+> `VoskRecognizer.acceptWaveForm()` ahora loguea en nivel `DEBUG`:
+> - El JSON crudo de `getPartialResult()` / `getResult()` con elapsed time
+> - El texto extraído tras `extractText()`
+> - En `updateViseme()`: la última palabra, el viseme resultante, y si se encoló o se descartó
+>
+> Para activar los logs: cambiar el nivel del logger `org.PNGV.phoneme.VoskRecognizer`
+> a `DEBUG` en `logback.xml` (o el perfil equivalente).
+>
+> **Reducción de ruido de logs — COMPLETADA:**
+> `acceptWaveForm()` ahora loguea el `rawJson` **solo cuando el resultado contiene
+> texto o un partial result** (`extractTextBest()` devuelve un texto no vacío).
+> Los buffers sin reconocimiento (silencio / sin contenido) ya no generan ruido
+> en los logs. `updateViseme()` y `parseWords()` también se ejecutan únicamente
+> cuando hay contenido. El log `acceptWaveForm: ...` del `catch` y el log de
+> `updateViseme()` (encolado/descartado) se mantienen.
+>
+> **Fase 1.2 (PLAN_MEJORAR_RECONOCIMIENTO_VOSK) — COMPLETADA (test manual):**
+> Se hizo el test de "talking" manual hablando frases fijas y el output
+> logueado muestra que las frases pronunciadas se loguean correctamente.
+>
+> **Fase 1.3 (PLAN_MEJORAR_RECONOCIMIENTO_VOSK) — COMPLETADA (verificación de modelo):**
+> Verificado que `assets/models/vosk-model-small-es-0.42` es el modelo correcto
+> y no está corrupto:
+> - `conf/mfcc.conf` → `--sample-frequency=16000.0` ✅
+> - Estructura completa: `am/final.mdl` (16MB), `graph/Gr.fst` (21.8MB) +
+>   `HCLr.fst` (12.2MB), `ivector/*` (10MB) → ~60MB total ✅
+> - `README` → "Small Spanish model for Vosk" con métricas WER ✅
+>
+> **FASE 1 (DIAGNÓSTICO) — COMPLETA.**
+>
+> **Fase 2.1 (PLAN_MEJORAR_RECONOCIMIENTO_VOSK) — COMPLETADA (Opción B nbest):**
+> `AppConfig.nbest=5`, `recognizer.setMaxAlternatives(5)`, `extractTextBest()`
+> elige la alternativa de mayor confianza, `setPartialWords(true)` para timestamps.
+>
+> **Fase 2.2 (PLAN_MEJORAR_RECONOCIMIENTO_VOSK) — COMPLETADA:**
+> `setPartialWords(true)` + `parseWords()` → `List<WordTiming>` (word/start/end/conf).
+> 19 tests de `parseWords`, `WordTiming`, `formatWords` pasan.
+>
+> **Fase 2.3 (PLAN_MEJORAR_RECONOCIMIENTO_VOSK) — COMPLETADA:**
+> `acceptWaveForm()` llama a `recognizer.getFinalResult()` cuando
+> `endOfUtterance == true`. Resultado pasa por `extractTextBest()` y
+> `parseWords()`. Etiquetado `FINAL_CONFIRMED` en logs.
+>
+> **Fase 2.4 (PLAN_MEJORAR_RECONOCIMIENTO_VOSK) — COMPLETADA:**
+> `bufferFrames` reducido de 1024 → 512 (~32 ms de latencia en vez de 64 ms).
+> Partial results más frecuentes = mejor granularidad temporal.
+> `AppConfig.bufferFrames` default actualizado, `config/app.json` actualizado.
+> 120 tests pasan. Verificación manual de calidad de reconocimiento pendiente
+> (Fase 6.4 del plan).
+>
+> **Fase 2.5 (PLAN_MEJORAR_RECONOCIMIENTO_VOSK) — COMPLETADA:**
+> VAD simple en `AudioCapture.loop()`: si `level == 0` (silencio), se omite
+> `frameProcessor.process()` (Vosk). El volumen se sigue publicando a la UI.
+> Log en `DEBUG`: "VAD: silencio detectado (nivel 0), se omite frameProcessor".
+> Reduce alucinaciones de reconocimiento durante pausas. 120 tests pasan.
+>
+> **FASE 2 — COMPLETA (2.1-2.5).** Siguiente: **Fase 3** (segmentación silábica
+> y mapeo letra→viseme).
+>
+> ---
+>
+> **FASE: REDUCCIÓN DE LATENCIA — COMPLETADA (120 tests pasan).**
+> Diagnóstico: los resultados de Vosk "se tardaban" en aparecer en los logs tras
+> decir una palabra. Se identificaron 4 fuentes de latencia en el pipeline
+> `Mic → line.read → VAD → Vosk → logs` y se corrigieron:
+>
+> | # | Causa | Impacto | Cambio |
+> |---|-------|---------|--------|
+> | 1 | **`nbest = 5`** (`setMaxAlternatives(5)`) | 🟥 ALTO | `AppConfig.nbest` 5 → **1**. Vosk calculaba 5 hipótesis/buffer en vez de 1 (el mayor coste de CPU). Para visemes solo usamos la última palabra de la ganadora, así que las 4 extra no aportaban nada visible. |
+> | 2 | **VAD con EMA suavizado** | 🟥 ALTO | `VolumeAnalyzer` expone `getInstantDbfs()` / `hasVoice()` (dBFS **instantáneo**, sin EMA). `AudioCapture.loop()` ahora usa `analyzer.hasVoice()` en vez de `level==0`. Antes el EMA (alfa 0.5, desde -100 dBFS) tardaba ~3 buffers (~96 ms) en salir de "silencio" y **descartaba los primeros ~100 ms de la palabra**. La barra de volumen de la UI sigue usando el valor suavizado. |
+> | 3 | **Log `INFO "silaba dominante"`** en cada buffer | 🟨 MEDIO | `VoskRecognizer.updateViseme()`: ese log ejecutaba el segmentador silábico (regex + loops) en **cada** buffer (~31x/seg). Bajado a `TRACE` con guard `LOG.isTraceEnabled()`, eliminando el coste del hot-path sin perder la info diagnóstica. |
+> | 4 | **`bufferFrames = 512`** (~32 ms) | 🟨 BAJO-MEDIO | `AppConfig.bufferFrames` 512 → **256** (~16 ms). El driver entrega el audio antes y los partial results son el doble de frecuentes. |
+>
+> **Archivos modificados:** `AppConfig.java` (nbest, bufferFrames),
+> `VolumeAnalyzer.java` (lastInstantDbfs, getInstantDbfs, hasVoice),
+> `AudioCapture.java` (VAD vía hasVoice), `VoskRecognizer.java` (log TRACE),
+> `config/app.json` (nbest=1, bufferFrames=256).
+>
+> **Nota de threading:** `VolumeAnalyzer.lastInstantDbfs` solo lo escribe y lee
+> el hilo de audio (igual que `smoothedDbfs`), por lo que no necesita ser volátil.
+>
+> ---
+>
+> **FASE: VISEME POR SÍLABA DOMINANTE + LETRA ALEATORIA — COMPLETADA (130 tests pasan).**
+>
+> Antes, `VoskRecognizer.updateViseme()` usaba `Viseme.fromWord(lastWord)` que
+> tomaba la **primera letra** de la última palabra. Ahora se usa la **sílaba
+> dominante** (tónica) de la palabra, que es la que más se percibe al escuchar.
+>
+> **Cambios en `VoskRecognizer`:**
+>
+> 1. `updateViseme(String text)`:
+>    - Antes: `Viseme.fromWord(lastWord)` (primera letra).
+>    - Ahora: `transformarTextoASilabasDominantes(lastWord)` → sílaba dominante
+>      → `obtenerVisemeDeSilabaDominante(sílaba)` (primera letra de la sílaba).
+>    - El log DEBUG ahora incluye la sílaba dominante para diagnóstico.
+>
+> 2. **`obtenerVisemeDeSilabaDominante(String silaba)`** (nuevo, `static`):
+>    - Recibe la sílaba dominante y devuelve el viseme de su primera letra
+>      mapeable (usa `Viseme.fromLetter(char)`).
+>    - Si no hay letras mapeables, devuelve `Viseme.NEUTRAL`.
+>
+> 3. **`obtenerVisemeLetraAleatoria(String texto)`** (nuevo, `static`):
+>    - Calcula la sílaba dominante de la palabra.
+>    - Recopila todas las letras presentes en esa sílaba.
+>    - Elige una al azar (`java.util.Random`) y devuelve su viseme.
+>    - Sobrecarga `obtenerVisemeLetraAleatoria(String, Random)` para tests
+>      determinísticos (inyección del generador aleatorio).
+>    - Si no hay letras, devuelve `Viseme.NEUTRAL`.
+>    - **Uso:** añadir "variación" al habla cuando la sílaba dominante produce
+>      un viseme poco expresivo, o para dar sensación de movimiento más natural.
+>
+> **Archivos modificados:**
+> - `VoskRecognizer.java`: `updateViseme()` usa sílaba dominante; nuevas funciones
+>   `obtenerVisemeDeSilabaDominante()` y `obtenerVisemeLetraAleatoria()` (+ sobrecarga).
+> - `VoskRecognizerTest.java`: +24 tests (16 para `obtenerVisemeDeSilabaDominante`,
+>   8 para `obtenerVisemeLetraAleatoria`). Total: 130 tests pasando.

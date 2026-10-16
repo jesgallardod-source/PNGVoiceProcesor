@@ -267,11 +267,30 @@ public class AudioCapture implements AutoCloseable {
 
             // Procesador opcional (p. ej. reconocedor de fonemas). Las
             // excepciones se capturan para no tumbar el hilo de audio.
+            //
+            // VAD (Fase 2.5): si no hay voz, no se pasa el buffer a Vosk para
+            // reducir alucinaciones y "fantasmas" de reconocimiento durante
+            // pausas.
+            //
+            // IMPORTANTE (reducción de latencia): usamos analyzer.hasVoice(),
+            // que se basa en el dBFS INSTANTÁNEO del buffer, y NO en `level`
+            // (que es el nivel suavizado por EMA). El nivel suavizado parte de
+            // -100 dBFS y, con alfa 0.5, tarda ~3 buffers (~96 ms) en salir de
+            // "silencio", de modo que los primeros ~100 ms de la palabra se
+            // descartaban antes de llegar a Vosk. Con hasVoice() el primer
+            // buffer con sonido ya se envía al reconocedor, eliminando esa
+            // latencia de arranque. La barra de volumen de la UI sigue usando
+            // el valor suavizado (getState()).
             if (frameProcessor != null) {
-                try {
-                    frameProcessor.process(processed, processedLen);
-                } catch (Exception e) {
-                    LOG.warn("AudioFrameProcessor falló: {}", e.getMessage(), e);
+                if (!analyzer.hasVoice()) {
+                    // Silencio detectado → se omite frameProcessor para
+                    // reducir alucinaciones. Sin log (reducción de ruido).
+                } else {
+                    try {
+                        frameProcessor.process(processed, processedLen);
+                    } catch (Exception e) {
+                        LOG.warn("AudioFrameProcessor falló: {}", e.getMessage(), e);
+                    }
                 }
             }
         }

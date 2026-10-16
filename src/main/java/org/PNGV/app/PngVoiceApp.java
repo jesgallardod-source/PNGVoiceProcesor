@@ -454,12 +454,17 @@ public class PngVoiceApp extends javafx.application.Application {
 
         if (firstFrame) {
             // Empieza la "palabra": congelamos la primera imagen por FIRST_LAST_MS.
-            // Con reconocedor, la primera imagen sale de la cola de letras;
-            // si la cola está vacía se usa el fallback aleatorio por volumen.
-            currentVisible = nextVisemeOrPick(level);
+            // Con reconocedor, la primera imagen sale de la cola de letras.
+            // Si la cola está vacía (Vosk aún no reconoció texto), NO se cambia
+            // la imagen: se conserva la actual hasta que llegue un viseme real.
+            // (El fallback aleatorio por volumen solo se usa sin reconocedor.)
+            Viseme next = nextVisemeOrPick(level);
+            if (next != null) {
+                currentVisible = next;
+                visibleImageStartNanos = now;
+            }
             isTalking = true;
             isHoldingFirst = true;
-            visibleImageStartNanos = now;
         } else if (talking) {
             isTalking = true;
             if (isHoldingFirst) {
@@ -467,14 +472,20 @@ public class PngVoiceApp extends javafx.application.Application {
                 // a ritmo normal (MIDDLE_MS) y se rota.
                 if (elapsedMs(now, visibleImageStartNanos) >= FIRST_LAST_MS) {
                     isHoldingFirst = false;
-                    currentVisible = nextVisemeOrPickDifferent(level, currentVisible);
-                    visibleImageStartNanos = now;
+                    Viseme next = nextVisemeOrPickDifferent(level, currentVisible);
+                    if (next != null) {
+                        currentVisible = next;
+                        visibleImageStartNanos = now;
+                    }
                 }
             } else {
                 // Ritmo normal: rotamos cada MIDDLE_MS, sin repetir la misma imagen.
                 if (elapsedMs(now, visibleImageStartNanos) >= MIDDLE_MS) {
-                    currentVisible = nextVisemeOrPickDifferent(level, currentVisible);
-                    visibleImageStartNanos = now;
+                    Viseme next = nextVisemeOrPickDifferent(level, currentVisible);
+                    if (next != null) {
+                        currentVisible = next;
+                        visibleImageStartNanos = now;
+                    }
                 }
             }
         } else if (lastFrame) {
@@ -598,43 +609,53 @@ public class PngVoiceApp extends javafx.application.Application {
 
     /**
      * Devuelve el siguiente viseme <b>de la cola del reconocedor</b> (en orden de
-     * aparición). Si no hay reconocedor o la cola está vacía, cae al fallback
-     * aleatorio por volumen ({@link #pickTalkingViseme(int)}).
+     * aparición).
      *
-     * <p>La cola solo se consume (poll) cuando hay algo realmente pendiente, para
-     * no "quemar" letras reconocidas cuando el fallback ya es suficiente.
+     * <p><b>Con reconocedor Vosk activo:</b> devuelve el viseme de la cola, o
+     * {@code null} si la cola está vacía (Vosk aún no ha reconocido texto).
+     * {@code null} significa "no cambiar la imagen": <b>solo</b> se actualiza
+     * el viseme cuando Vosk realmente reconoce algo, evitando que cualquier
+     * sonido con volumen (ruido, eco) cambie la imagen al azar.
      *
-     * @param level nivel de volumen (para el fallback)
-     * @return el viseme a mostrar
+     * <p><b>Sin reconocedor</b> (modo fallback por volumen): devuelve un viseme
+     * aleatorio según el nivel ({@link #pickTalkingViseme(int)}).
+     *
+     * @param level nivel de volumen (solo se usa en el fallback sin reconocedor)
+     * @return el viseme a mostrar, o {@code null} para no cambiar la imagen
      */
     private Viseme nextVisemeOrPick(int level) {
         if (voskRecognizer != null) {
-            Viseme v = voskRecognizer.pollViseme();
-            if (v != null) {
-                return v;
-            }
+            // Solo se cambia la imagen si hay un viseme reconocido pendiente.
+            return voskRecognizer.pollViseme();
         }
+        // Sin reconocedor: fallback aleatorio por volumen (siempre no-null).
         return pickTalkingViseme(level);
     }
 
     /**
      * Devuelve el siguiente viseme <b>de la cola del reconocedor</b>, evitando
-     * repetir el que ya está visible. Si la cola no tiene un viseme distinto
-     * (o no hay reconocedor), cae al fallback aleatorio por volumen.
+     * repetir el que ya está visible.
      *
-     * @param level  nivel de volumen (para el fallback)
-     * @param avoid  viseme que ya está visible (para no repetirlo)
-     * @return el viseme a mostrar
+     * <p><b>Con reconocedor Vosk activo:</b> devuelve el viseme de la cola si es
+     * distinto al actual, o {@code null} para no cambiar la imagen (cola vacía
+     * o el viseme coincide con el ya visible). Nunca cae al aleatorio: así la
+     * imagen solo cambia cuando Vosk reconoce un texto nuevo.
+     *
+     * <p><b>Sin reconocedor</b> (modo fallback por volumen): devuelve un viseme
+     * aleatorio distinto al actual ({@link #pickDifferentTalkingViseme(int, Viseme)}).
+     *
+     * @param level nivel de volumen (solo se usa en el fallback sin reconocedor)
+     * @param avoid viseme que ya está visible (para no repetirlo)
+     * @return el viseme a mostrar, o {@code null} para no cambiar la imagen
      */
     private Viseme nextVisemeOrPickDifferent(int level, Viseme avoid) {
         if (voskRecognizer != null) {
             Viseme v = voskRecognizer.pollViseme();
-            if (v != null && v != avoid) {
-                return v;
-            }
-            // Si el viseme de la cola repite el actual, se descarta (ya se
-            // consumió) y se usa el fallback; la cola se irá drenando sola.
+            // Si coincide con el ya visible, se descarta (ya se consumió) y no
+            // se cambia la imagen; la cola se irá drenando sola.
+            return (v != null && v != avoid) ? v : null;
         }
+        // Sin reconocedor: fallback aleatorio por volumen (siempre no-null).
         return pickDifferentTalkingViseme(level, avoid);
     }
 
@@ -1343,7 +1364,7 @@ public class PngVoiceApp extends javafx.application.Application {
         imageHolder.setImage(blinkImage);
         imageHolder.setVisible(true);
         imageHolder.toFront();
-        LOG.debug("Blink: mostrando imagen de parpadeo");
+        LOG.trace("Blink: mostrando imagen de parpadeo");
     }
 
     /** Restaura la imagen que estaba antes del parpadeo. */
@@ -1356,7 +1377,7 @@ public class PngVoiceApp extends javafx.application.Application {
         if (preBlinkImage == null) {
             imageHolder.setVisible(false);
         }
-        LOG.debug("Blink: imagen restaurada");
+        LOG.trace("Blink: imagen restaurada");
     }
 
     /**
