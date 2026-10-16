@@ -42,7 +42,7 @@ Sin internet, sin servidores. Todo local.
 │                                                                             │
 │  Micrófono ──► TargetDataLine.read() ──► byte[] PCM 16-bit mono @ 16 kHz   │
 │      │                                                                     │
-│      ├──► VolumeAnalyzer.analyzeLevel(int[])                               │
+│      ├──► VolumeAnalyzer.analyze(byte[], int)  [sobre PCM, sin int[]]     │
 │      │       RMS → dBFS → EMA smoothing → nivel 0-3                        │
 │      │       ──► AtomicReference<VolumeState> (thread-safe)               │
 │      │                                                                     │
@@ -62,7 +62,7 @@ Sin internet, sin servidores. Todo local.
 │  AnimationTimer.handle(now):                                               │
 │      state  = audioCapture.getState()       // VolumeState(level, norm)    │
 │      tick(): drena cola del reconocedor → playbackQueue (fila de sílabas)  │
-│              avanza la fila: cada sílaba ~syllableMinMs (default 80 ms)    │
+│              avanza la fila: cada sílaba ~syllableMinMs (default 50 ms)    │
 │              ──► applyViseme(viseme)  (imagen por viseme, o NEUTRAL)       │
 │                                                                             │
 │  UI: ProgressBar (volumen), Label (viseme), Label (estado)                 │
@@ -71,7 +71,26 @@ Sin internet, sin servidores. Todo local.
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Latencia objetivo:** < 80 ms (buffer de 1024 frames a 16 kHz = ~64 ms).
+**Latencia objetivo:** mínima posible sin tocar parámetros de Vosk. La
+latencia total = buffer de captura + reconocimiento (Vosk) + `syllableMinMs`.
+Con los defaults actuales: **buffer de 128 frames a 16 kHz = ~8 ms de captura**
++ reconocimiento (Vosk, ~10–30 ms según carga) + **`syllableMinMs` 40 ms de
+animación** → ~60–80 ms de boca por sílaba.
+
+> **Optimizaciones de latencia/fluidez (sin tocar parámetros de Vosk):**
+> - `bufferFrames` 256 → **128** (8 ms de captura): el buffer llega antes al
+>   reconocedor. **No afecta a Vosk** (acumula internamente; su único parámetro
+>   fijo es la frecuencia 16 kHz, que se mantiene).
+> - `syllableMinMs` 50 → **40** (~25 sílabas/s; ≈ 2 frames a 60 fps, no se
+>   comprime a 1 frame): la boca avanza más rápido.
+> - **UI sin "jank":** `tick()` y `applyViseme()` ya **no** hacen
+>   `setText()`/`setProgress()`/`setVisible()` en **cada frame** (~60/s); solo
+>   cuando el valor efectivamente cambia (`lastVisemeLabel`, umbral 0.002 en la
+>   barra, guards en `rightLetterLabel`/`imageHolder`). Evita re-layouts
+>   innecesarios en el hilo JavaFX que se notaban como tirones.
+> - **Volumen/Vosk en el mismo hilo de audio, por buffer:** el hilo de audio ya
+>   hace `analyze()` + `acceptWaveForm()` secuencialmente por buffer pequeño
+>   (128 frames), así el reconocedor procesa cada chunk en cuanto llega.
 
 > **Nota importante (formato de salida de Vosk):** `Recognizer.getResult()` y
 > `Recognizer.getPartialResult()` **no devuelven texto plano, devuelven JSON**:
@@ -177,9 +196,12 @@ Archivo: `config/app.json` (creado automáticamente con defaults si no existe).
   "thresholdLow": -50.0,
   "thresholdMid": -40.0,
   "thresholdHigh": -28.0,
-  "smoothing": 0.5,
-  "bufferFrames": 1024,
+  "screamThreshold": 0.98,
+  "smoothing": 0.3,
+  "bufferFrames": 256,
   "sampleRate": 16000,
+  "syllableMinMs": 50,
+  "silenceHoldMs": 120,
   "modelPath": "assets/models/vosk-model-small-es-0.42",
   "activeAvatar": "assets/avatars/avatar1.png",
   "backgroundColor": "#00FF00",
@@ -198,14 +220,14 @@ Archivo: `config/app.json` (creado automáticamente con defaults si no existe).
 | `thresholdMid` | -40 dBFS | Por debajo = nivel 1 (bajo) |
 | `thresholdHigh` | -28 dBFS | Por debajo = nivel 2 (medio), si no 3 (alto) |
 | `smoothing` | 0.5 | Alfa EMA. 0=reactivo, 1=inerte |
-| `bufferFrames` | 1024 | Samples por buffer (~64 ms a 16 kHz) |
+| `bufferFrames` | 128 | Samples por buffer (~8 ms a 16 kHz). Menos = menos latencia de captura. No afecta a Vosk (acumula internamente). |
 | `sampleRate` | 16000 | **Debe ser 16000** (requisito del modelo Vosk) |
 | `modelPath` | `assets/models/vosk-model-small-es-0.42` | Ruta al modelo Vosk |
 | `activeAvatar` | `assets/avatars/avatar1.png` | Ruta sprite sheet (no usado aún) |
 | `backgroundColor` | `#00FF00` | Fondo croma-key |
 | `visemeImages` | `{}` | Mapa viseme→ruta PNG (placeholder si vacío) |
 | `vibrationEnabled` | `true` | Vibración (agitamiento) del avatar al hablar: ON/OFF (botón en la UI). **No afecta al grito**: cuando el avatar está en un episodio de grito activo, la imagen SIEMPRE vibra aunque el botón esté OFF (ver `updateImageWiggle`). |
-| `syllableMinMs` | `80` | Duración mínima (ms) de **cada sílaba** en la fila de reproducción antes de avanzar a la siguiente. Más bajo = boca más fluida (más sílabas/s). Se refresca en `startMic()` → campo `PngVoiceApp.syllableMinMs`. |
+| `syllableMinMs` | `40` | Duración mínima (ms) de **cada sílaba** en la fila de reproducción antes de avanzar a la siguiente. Más bajo = boca más fluida (más sílabas/s). A 60 fps, 40 ms ≈ 2 frames/sílaba (no se comprime a 1 frame). **No es parámetro de Vosk**, solo el ritmo de animación de la UI. Se refresca en `startMic()` → campo `PngVoiceApp.syllableMinMs`. |
 | `silenceHoldMs` | `200` | Hold (ms) que se mantiene la última sílaba antes de volver a NEUTRAL. **Si la siguiente sílaba llega dentro de este tiempo, el avatar NO vuelve a NEUTRAL**: conserva la última boca hasta que llegue la siguiente (movimiento continuo, sin "parpadeo" a boca cerrada). Solo las pausas reales (> hold) cierran la boca. 200 ms cubre las pausas típicas entre sílabas/palabras (~80–160 ms). Se refresca en `startMic()` → campo `PngVoiceApp.silenceHoldMs`. |
 
 ---
@@ -232,6 +254,7 @@ Archivo: `config/app.json` (creado automáticamente con defaults si no existe).
 | **`tick` protege contra `peekFirst()` null al vaciar la cola (bug NPE)** | En el paso de avance de la fila, tras `playbackQueue.pollFirst()` (la sílaba actual terminó) la cola **puede quedar vacía** si era la última. Leer `currentVisible = playbackQueue.peekFirst()` en ese caso devuelve `null` y tumba el hilo JavaFX con `NullPointerException` en `displayName` (switch sobre `v.ordinal()`). Ahora, tras el `poll`, se comprueba `playbackQueue.isEmpty()`: si quedó vacía se usa `lastSpoken` (última sílaba) y se marca `lastFinishNanos`/`isTalking=false` (arranca el hold de silencio); solo si aún hay elementos se hace `peekFirst()`. |
 | **Al drenar sílabas a una fila vacía se reinicia el reloj de la fila (bug: sílabas saltadas)** | Antes, cuando una sílaba nueva entraba en `playbackQueue` **vacía**, `visibleImageStartNanos` seguía con el timestamp de la última sílaba de hace un rato. Al entrar el paso de avance, `elapsedMs(now, visibleImageStartNanos) >= syllableMinMs` era **true** (siempre: entre sílabas pasan cientos de ms) y `pollFirst()` **consumía la sílaba nueva en el mismo frame sin mostrarla**. Efecto visible (confirmado por logs): las sílabas solitarias (p. ej. "de"→E) desaparecían sin cambiar la imagen, y en las de varias sílabas solo se veía la última ("vice"→I E → solo E). Solución: en `tick()`, al drenar con `queueWasEmpty` se hace `visibleImageStartNanos = now` y `isTalking = true`, para que la primera sílaba nueva tenga sus `syllableMinMs` completos. |
 | **El grito SIEMPRE vibra, sin importar el botón "Vibración"** | El botón solo controla el agitamiento del habla normal. En `updateImageWiggle(long)` la condición de "quieto" es `!vibrationEnabled && !inScream`, y el `target` de amplitud es `(isTalking \|\| inScream) ? 1.0 : 0.0`. Así el grito se siente "fuerte" de forma consistente aunque el usuario apague la vibración de habla normal. |
+| **La UI solo escribe propiedades JavaFX cuando cambian (anti-jank)** | `tick()` y `applyViseme()` se ejecutan en **cada frame** (~60/s) del `AnimationTimer`. Antes llamaban `visemeLabel.setText`, `rightLetterLabel.setText` y `volumeBar.setProgress` **siempre**, aunque el valor no variara: cada `setText` invalida el layout y cada `setProgress` invalida la barra → ~60 re-layouts/s de nada que el usuario percibe como **tirones / poca fluidez**. Ahora: `lastVisemeLabel` guarda el último viseme mostrado en la etiqueta (solo `setText` al cambiar), la barra usa un umbral `0.002` (evita el spam de `setProgress` por ruido de float), y `applyViseme` solo toca `rightLetterLabel`/`imageHolder` cuando el viseme cambia o la visibilidad difiere. El dibujo del avatar queda limpio y a 60 fps reales. |
 | **Grito disparado por volumen NORMALIZADO al tope** | El viseme `GRITO` solo aparece cuando el volumen normalizado (0..1 de `VolumeAnalyzer.getNormalizedLevel()`) alcanza `GRITO_NORM_THRESHOLD = 0.85` (~-20 dBFS, escala completa). Antes se usaba `level >= 3`, pero el nivel 3 ya se alcanza desde `-28 dBFS` (habla normal), así que el grito salía "aleatoriamente" al hablar. Con el umbral normalizado el grito solo aparece al llegar al tope de decibeles. Solo se muestra si el usuario asignó una imagen a `GRITO` y el avatar está hablando; si no, conserva el viseme normal. |
 
 ---

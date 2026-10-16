@@ -32,22 +32,42 @@ public class AppConfig {
      */
     private double screamThreshold = 0.96;
 
-    /** Alfa del suavizado exponencial (0..1). 0.5 = muy reactivo, 0.9 = muy suave. */
-    private double smoothing = 0.5;
+    /**
+     * Alfa del suavizado exponencial (0..1) del volumen.
+     *
+     * <p>0 = totalmente reactivo (el volumen/grito sigue el pico inmediato),
+     * 1 = totalmente inerte. El default baja de 0.5 a <b>0.3</b> para que la
+     * barra de volumen y el disparo del grito respondan más rápido sin
+     * "parpadeo" excesivo. Afecta solo al eje de volumen, no a los visemes
+     * (que salen de Vosk) ni a ningún parámetro del reconocedor.
+     */
+    private double smoothing = 0.3;
 
     /**
      * Duración mínima (ms) que se muestra <b>cada sílaba</b> (viseme) en la
      * fila de reproducción antes de avanzar a la siguiente.
      *
-     * <p>Cuanto más bajo, más rápida y fluida se ve la boca (más sílabas/s).
-     * El default 80 ms (~12 sílabas/s) es más rápido que el habla natural
-     * (~150 ms) para que el cambio de imagen se sienta continuo y cercano a
-     * una persona pronunciando, sin "pulsos" entre sílaba y sílaba.
+     * <p><b>Es la principal fuente de latencia artificial</b> del pipeline:
+     * cada sílaba reconocida se "congela" este tiempo antes de mostrar la
+     * siguiente, así una palabra de N sílabas tarda N × este valor en
+     * animarse <i>después</i> de haber sido dicha. Cuanto más bajo, más
+     * fluida y reactiva se ve la boca.
      *
-     * <p>Para afinarlo sin recompilar, cámbialo en {@code app.json}
-     * (clave {@code syllableMinMs}).
+     * <p>El default baja de 80 a <b>40 ms</b> (~25 sílabas/s), muy por debajo
+     * del ritmo del habla natural (~150 ms/sílaba), para que la secuencia de
+     * sílabas de una palabra se reproduzca casi al instante de reconocerse.
+     * A 60 fps un frame son ~16,7 ms, así que 40 ms ≈ 2 frames por sílaba:
+     * el cambio de imagen sigue siendo perceptible (no se "comprime" a 1 frame)
+     * pero la boca avanza mucho más rápido que con 50 ms.
+     * Las sílabas repetidas (mismo viseme) siguen sumando duración, de modo
+     * que se conserva la sensación de sonido sostenido.
+     *
+     * <p><b>No es un parámetro de Vosk</b> (no afecta al reconocedor, que
+     * emite sílabas en cuanto las detecta); es solo el ritmo de la animación
+     * de la UI. Si prefieres una boca menos veloz, sube el valor en
+     * {@code app.json} (clave {@code syllableMinMs}).
      */
-    private long syllableMinMs = 80L;
+    private long syllableMinMs = 40L;
 
     /**
      * Duración (ms) que se mantiene la <b>última</b> sílaba hablada antes de
@@ -61,17 +81,36 @@ public class AppConfig {
      * sílaba (pausa real) el avatar vuelve a NEUTRAL.
      *
      * <p>Cuanto más alto, más tiempo se mantiene la última sílaba (más
-     * continuidad, menos saltos a neutro). El default 200 ms cubre las pausas
+     * continuidad, menos saltos a neutro). El default 120 ms cubre las pausas
      * típicas entre sílabas/palabras (~80–160 ms) sin "congelar" el avatar en
-     * NEUTRAL, y deja que las pausas largas (>200 ms) cierren la boca.
+     * NEUTRAL, y deja que las pausas largas cierren la boca.
+     *
+     * <p>El default baja de 200 a <b>120 ms</b>: sigue cubriendo las pausas
+     * típicas entre sílabas (~80–160 ms) para no ver "parpadeos" a boca
+     * cerrada, pero reduce el tiempo que la última sílaba se mantiene antes
+     * de volver a NEUTRAL, haciendo que la boca se cierre más rápido al
+     * terminar de hablar.
      *
      * <p>Para afinarlo sin recompilar, cámbialo en {@code app.json}
      * (clave {@code silenceHoldMs}).
      */
-    private long silenceHoldMs = 200L;
+    private long silenceHoldMs = 120L;
 
-    /** Muestra por buffer de captura (16-bit). 1024 es un buen valor. */
-    private int bufferFrames = 1024;
+    /**
+     * Muestra por buffer de captura (16-bit).
+     *
+     * <p>Menos frames = menos latencia de audio (el hilo de captura entrega
+     * el buffer a Vosk antes de que se llene) = animación más reactiva.
+     * A 16 kHz: 512 frames = 32 ms, 256 = 16 ms, 128 = 8 ms.
+     * El default baja a <b>128</b> (~8 ms de latencia de captura) para que el
+     * buffer llegue al reconocedor lo antes posible. <b>No afecta al
+     * reconocimiento de Vosk</b>: el reconocedor acepta chunks de cualquier
+     * tamaño (los va acumulando internamente hasta detectar fonemas); el
+     * único parámetro fijo de Vosk es la frecuencia (16000 Hz), que se
+     * mantiene. Chunks más pequeños también aligeran el hilo de audio
+     * (menos CPU por buffer) dejando margen para que el pipeline responda.
+     */
+    private int bufferFrames = 128;
     /**
      * Frecuencia de muestreo. <b>Debe coincidir con la frecuencia con la que
      * está entrenado el modelo de Vosk</b> (ver {@code conf/mfcc.conf} del

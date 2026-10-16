@@ -18,8 +18,8 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * <p>El flujo:
  * <pre>
- *   TargetDataLine.read() → [SampleRateFilter] → int[] → VolumeAnalyzer → AtomicReference&lt;VolumeState&gt;
- *                                            └──────► [SampleRateFilter] → AudioFrameProcessor (Vosk)
+ *   TargetDataLine.read() → [SampleRateFilter] → byte[] PCM → VolumeAnalyzer → AtomicReference&lt;VolumeState&gt;
+ *                                            └──────────────► byte[] PCM → AudioFrameProcessor (Vosk)
  * </pre>
  *
  * <p><b>Garantía de frecuencia:</b> aunque el SO/driver entregue el audio a
@@ -252,16 +252,12 @@ public class AudioCapture implements AutoCloseable {
                 processedLen = n;
             }
 
-            // Decodificar PCM 16-bit little-endian a int[] (para el analizador
-            // de volumen, que trabaja en muestras enteras).
-            int count = processedLen / 2;
-            int[] samples = new int[count];
-            for (int i = 0; i < count; i++) {
-                samples[i] = (short) ((processed[i * 2] & 0xFF)
-                        | (processed[i * 2 + 1] << 8));
-            }
-
-            int level = analyzer.analyzeLevel(samples);
+            // Analizar el volumen directamente sobre el buffer PCM 16-bit
+            // (sin decodificar a int[]): el VolumeAnalyzer lee los bytes
+            // little-endian internamente. Esto evita una copia y una
+            // asignación de array por buffer, reduciendo CPU y GC en el
+            // hilo de audio para que el pipeline responda más rápido.
+            int level = analyzer.analyze(processed, processedLen);
             double normalized = analyzer.getNormalizedLevel();
             stateRef.set(new VolumeState(level, normalized));
 

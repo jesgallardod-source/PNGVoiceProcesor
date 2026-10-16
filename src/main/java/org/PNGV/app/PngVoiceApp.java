@@ -87,7 +87,7 @@ public class PngVoiceApp extends javafx.application.Application {
      * ({@code silenceHoldMs}) al iniciar el micrófono y se guarda en el campo
      * de instancia {@link #silenceHoldMs}.
      */
-    private static final long SILENCE_HOLD_MS = 50;
+    private static final long SILENCE_HOLD_MS = 120;
 
     /**
      * Duración mínima (ms) que se muestra <b>cada sílaba</b> (viseme) en la
@@ -111,7 +111,7 @@ public class PngVoiceApp extends javafx.application.Application {
      * ({@code syllableMinMs}) al iniciar el micrófono y se guarda en el campo
      * de instancia {@link #syllableMinMs}.
      */
-    private static final long SYLLABLE_MIN_MS = 80;
+    private static final long SYLLABLE_MIN_MS = 50;
 
     /**
      * Visemes (grupos de letras) que se muestran como imágenes propias.
@@ -200,6 +200,8 @@ public class PngVoiceApp extends javafx.application.Application {
     private Viseme currentVisible = Viseme.NEUTRAL;
     /** true si el avatar está en modo "hablando" (viseme != NEUTRAL). */
     private boolean isTalking = false;
+    /** Último viseme reflejado en la etiqueta "Viseme:" (evita setText por frame). */
+    private Viseme lastVisemeLabel = null;
     /** Marca (ns, AnimationTimer) de cuándo se fijó la imagen visible actual. */
     private long visibleImageStartNanos = 0L;
 
@@ -628,8 +630,16 @@ public class PngVoiceApp extends javafx.application.Application {
 
         // Aplicar la imagen del viseme elegido en este frame.
         applyViseme(currentVisible);
-        volumeBar.setProgress(normalized);
-        visemeLabel.setText("Viseme: " + currentVisible);
+        // Solo actualizar la barra si el valor cambió de forma apreciable:
+        // setProgress() en cada frame (~60/s) fuerza invalidaciones y
+        // re-layouts innecesarios que se notan como "jank" (poco fluido).
+        if (Math.abs(volumeBar.getProgress() - normalized) > 0.002) {
+            volumeBar.setProgress(normalized);
+        }
+        if (lastVisemeLabel != currentVisible) {
+            lastVisemeLabel = currentVisible;
+            visemeLabel.setText("Viseme: " + currentVisible);
+        }
     }
 
     /**
@@ -690,7 +700,9 @@ public class PngVoiceApp extends javafx.application.Application {
                     v, hasImage ? "SÍ" : "NO", System.currentTimeMillis());
             lastAppliedViseme = v;
         }
-        if (rightLetterLabel != null) {
+        // Solo actualizar la etiqueta de letra cuando el viseme cambia:
+        // hacer setText() en cada frame (~60/s) fuerza re-layouts innecesarios.
+        if (rightLetterLabel != null && v != lastAppliedViseme) {
             rightLetterLabel.setText("Letra actual: " + displayName(v));
         }
         // No sobrescribir la imagen durante un parpadeo activo.
@@ -698,16 +710,21 @@ public class PngVoiceApp extends javafx.application.Application {
             return;
         }
         // Si el usuario asignó una imagen a este viseme, la muestra;
-        // si no, se oculta la imagen.
+        // si no, se oculta la imagen. Solo tocar las propiedades cuando hay
+        // un cambio real, para no invalidar el nodo en cada frame.
         Image img = visemeImages.get(v);
         if (img != null) {
             if (imageHolder.getImage() != img) {
                 imageHolder.setImage(img);
             }
-            imageHolder.setVisible(true);
-            imageHolder.toFront();
+            if (!imageHolder.isVisible()) {
+                imageHolder.setVisible(true);
+                imageHolder.toFront();
+            }
         } else {
-            imageHolder.setVisible(false);
+            if (imageHolder.isVisible()) {
+                imageHolder.setVisible(false);
+            }
         }
     }
 

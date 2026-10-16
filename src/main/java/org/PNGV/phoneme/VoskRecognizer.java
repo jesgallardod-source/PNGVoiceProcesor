@@ -206,6 +206,15 @@ public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
                 String rawJson = recognizer.getResult();
                 String text = extractText(rawJson);
                 if (text != null && !text.isBlank()) {
+                    // IMPORTANTE (fluidez): calcular la última palabra y detectar
+                    // si YA se animó vía resultado PARCIAL ANTES de resetear los
+                    // guards. Si la palabra final coincide con la última palabra
+                    // parcial ya encolada, la boca ya la mostró; re-encolarla aquí
+                    // provocaba un "tartamudeo" visible (la última sílaba se
+                    // repite ~1 s después del FINAL). En ese caso se omite.
+                    String finalWord = lastWord(text);
+                    boolean alreadyAnimated = !finalWord.isEmpty()
+                            && finalWord.equals(lastProcessedPartialWord);
                     if (!text.equals(lastLoggedText)) {
                         LOG.info("[Vosk {}] FINAL   text='{}'", System.currentTimeMillis(), text);
                     }
@@ -215,10 +224,14 @@ public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
                     // Reinicia el guard de palabras parciales para que la
                     // siguiente frase se procese desde cero.
                     lastProcessedPartialWord = "";
-                    // Mapea la última palabra en sílabas y encola un viseme por sílaba.
-                    String finalWord = lastWord(text);
                     logNewWord(finalWord, "FINAL");
-                    updateVisemesFromSyllables(text);
+                    if (alreadyAnimated) {
+                        LOG.debug("[Vosk {}] FINAL '{}' ya animado por parcial; omito re-encolado",
+                                System.currentTimeMillis(), finalWord);
+                    } else {
+                        // Mapea la última palabra en sílabas y encola un viseme por sílaba.
+                        updateVisemesFromSyllables(text);
+                    }
                 }
             } else {
                 // Resultado parcial: procesa en tiempo real cada nueva palabra
