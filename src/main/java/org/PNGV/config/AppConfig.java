@@ -67,32 +67,71 @@ public class AppConfig {
      * de la UI. Si prefieres una boca menos veloz, sube el valor en
      * {@code app.json} (clave {@code syllableMinMs}).
      */
-    private long syllableMinMs = 40L;
+    private long syllableMinMs = 25L;
 
     /**
-     * Duración (ms) que se mantiene la <b>última</b> sílaba hablada antes de
-     * volver a NEUTRAL al llegar el silencio entre palabras.
+     * Umbral de volumen <b>normalizado (0..1)</b> a partir del cual el avatar
+     * se considera "abriendo la boca" (estado OPEN en la máquina de estados de
+     * la boca, ver {@code PngVoiceApp.tick}).
      *
-     * <p>Siempre que la siguiente sílaba llegue <b>dentro</b> de este tiempo,
-     * el avatar <b>NO</b> vuelve a NEUTRAL: conserva la última boca hasta que
-     * llegue la siguiente. Así las sílabas cercanas (y las palabras
-     * consecutivas pronunciadas sin pausa) se ven <b>continuas</b>, sin el
-     * "parpadeo" a boca cerrada. Solo cuando pasa más de este tiempo sin nueva
-     * sílaba (pausa real) el avatar vuelve a NEUTRAL.
+     * <p>El volumen ya es reactivo (buffer de ~8 ms + EMA con alfa 0.3), así que
+     * usarlo como disparador de la boca hace que el avatar se vea "hablando"
+     * <b>al instante</b> de empezar a hablar, sin esperar a que Vosk confirme
+     * la primera palabra (que tarda ~200–400 ms).
      *
-     * <p>Cuanto más alto, más tiempo se mantiene la última sílaba (más
-     * continuidad, menos saltos a neutro). El default 120 ms cubre las pausas
-     * típicas entre sílabas/palabras (~80–160 ms) sin "congelar" el avatar en
-     * NEUTRAL, y deja que las pausas largas cierren la boca.
+     * <p>El default 0.05 (~-44 dBFS con el EMA actual) es bastante por encima
+     * del ruido de fondo pero muy por debajo del habla normal (~0.3..0.6), así
+     * que se dispara con cualquier sonido de voz sin saltar por ruido ambiente.
      *
-     * <p>El default baja de 200 a <b>120 ms</b>: sigue cubriendo las pausas
-     * típicas entre sílabas (~80–160 ms) para no ver "parpadeos" a boca
-     * cerrada, pero reduce el tiempo que la última sílaba se mantiene antes
-     * de volver a NEUTRAL, haciendo que la boca se cierre más rápido al
-     * terminar de hablar.
+     * <p>Debe ser <b>mayor</b> que {@link #mouthCloseThreshold} (histéresis):
+     * si no, la boca abriría/cerraría en cada microvariación del volumen.
+     */
+    private double mouthOpenThreshold = 0.05;
+
+    /**
+     * Umbral de volumen <b>normalizado (0..1)</b> por debajo del cual el avatar
+     * se considera "cerrando la boca" (estado CLOSED).
      *
-     * <p>Para afinarlo sin recompilar, cámbialo en {@code app.json}
-     * (clave {@code silenceHoldMs}).
+     * <p>Debe ser <b>menor</b> que {@link #mouthOpenThreshold}: la diferencia
+     * entre ambos umbrales es la <b>histéresis</b> que evita que la boca
+     * "parpadee" abriendo/cerrando en cada pico de volumen dentro de una sílaba.
+     * Mientras el volumen esté entre {@code close} y {@code open}, la boca
+     * mantiene su estado actual.
+     *
+     * <p>El default 0.02 (~-50 dBFS) es justo por encima del ruido típico de
+     * fondo, así que el silencio real (sin voz) sí cierra la boca, pero las
+     * micropausas dentro de una palabra no.
+     */
+    private double mouthCloseThreshold = 0.02;
+
+    /**
+     * Tiempo (ms) que la boca se mantiene <b>abierta</b> tras la última
+     * actividad (volumen por encima del umbral de apertura o llegada de una
+     * sílaba nueva a la cola) antes de volver a NEUTRAL.
+     *
+     * <p>Sustituye (y complementa) al antiguo {@code silenceHoldMs}: ahora el
+     * "hold de silencio" se cuenta a partir de la última <b>actividad</b>
+     * (no solo desde que la fila de sílabas se vació). Así si el usuario
+     * mantiene la voz por encima del umbral la boca no se cierra, aunque no
+     * haya sílabas nuevas en la cola (Vosk no siempre emite sílabas).
+     *
+     * <p>El default 160 ms cubre las pausas típicas entre sílabas/palabras
+     * (~80–140 ms) sin "parpadeo" a boca cerrada, y deja que las pausas
+     * largas (>160 ms) cierren la boca.
+     */
+    private long mouthReleaseMs = 160L;
+
+    /**
+     * <b>LEGACY</b> — Duración (ms) que se mantenía la última sílaba hablada
+     * antes de volver a NEUTRAL.
+     *
+     * <p>Este campo quedó <b>sin usar</b> por la implementación de la boca por
+     * volumen (ver {@link #mouthReleaseMs}). Se mantiene solo para compatibilidad
+     * de serialización: si una {@code app.json} antigua tiene la clave
+     * {@code silenceHoldMs}, Jackson la deserializa sin error y la ignora al
+     * calcular el estado de la boca. La app ya no la lee.
+     *
+     * <p>Para afinar el cierre de la boca, usa {@link #mouthReleaseMs}.
      */
     private long silenceHoldMs = 120L;
 
@@ -174,6 +213,15 @@ public class AppConfig {
 
     public long getSilenceHoldMs() { return silenceHoldMs; }
     public void setSilenceHoldMs(long silenceHoldMs) { this.silenceHoldMs = silenceHoldMs; }
+
+    public double getMouthOpenThreshold() { return mouthOpenThreshold; }
+    public void setMouthOpenThreshold(double mouthOpenThreshold) { this.mouthOpenThreshold = mouthOpenThreshold; }
+
+    public double getMouthCloseThreshold() { return mouthCloseThreshold; }
+    public void setMouthCloseThreshold(double mouthCloseThreshold) { this.mouthCloseThreshold = mouthCloseThreshold; }
+
+    public long getMouthReleaseMs() { return mouthReleaseMs; }
+    public void setMouthReleaseMs(long mouthReleaseMs) { this.mouthReleaseMs = mouthReleaseMs; }
 
     public int getBufferFrames() { return bufferFrames; }
     public void setBufferFrames(int bufferFrames) { this.bufferFrames = bufferFrames; }

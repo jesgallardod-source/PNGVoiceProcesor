@@ -61,9 +61,16 @@ Sin internet, sin servidores. Todo local.
 │                                                                             │
 │  AnimationTimer.handle(now):                                               │
 │      state  = audioCapture.getState()       // VolumeState(level, norm)    │
-│      tick(): drena cola del reconocedor → playbackQueue (fila de sílabas)  │
-│              avanza la fila: cada sílaba ~syllableMinMs (default 50 ms)    │
-│              ──► applyViseme(viseme)  (imagen por viseme, o NEUTRAL)       │
+│      tick(): 1) boca OPEN/CLOSED por VOLUMEN (histéresis open/close +      │
+│                       hold mouthReleaseMs)                                 │
+│              2) drena cola del reconocedor → playbackQueue (sílabas)       │
+│              3) viseme a mostrar:                                           │
+│                   boca cerrada → NEUTRAL                                    │
+│                   boca abierta + sílabas → siguiente de la fila             │
+│                       (cada sílaba ~syllableMinMs, default 25 ms)          │
+│                   boca abierta + sin sílabas → lastSpoken                   │
+│              4) grito (si volumen ≥ gritoNormThreshold y boca abierta)      │
+│              5) applyViseme(viseme)  (imagen por viseme, o NEUTRAL)         │
 │                                                                             │
 │  UI: ProgressBar (volumen), Label (viseme), Label (estado)                 │
       Botones: Iniciar/Detener micrófono, Vibración (ON/OFF), Panel de letras│
@@ -71,18 +78,26 @@ Sin internet, sin servidores. Todo local.
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Latencia objetivo:** mínima posible sin tocar parámetros de Vosk. La
-latencia total = buffer de captura + reconocimiento (Vosk) + `syllableMinMs`.
-Con los defaults actuales: **buffer de 128 frames a 16 kHz = ~8 ms de captura**
-+ reconocimiento (Vosk, ~10–30 ms según carga) + **`syllableMinMs` 40 ms de
-animación** → ~60–80 ms de boca por sílaba.
+**Latencia objetivo:** mínima posible sin tocar parámetros de Vosk ni reducir
+más el buffer de captura. La latencia total = buffer de captura +
+reconocimiento (Vosk) + `syllableMinMs`. Con los defaults actuales:
+**buffer de 256 frames a 16 kHz = ~16 ms de captura** + reconocimiento
+(Vosk, ~10–30 ms según carga) + **`syllableMinMs` 25 ms de animación** →
+~50–70 ms de boca por sílaba.
 
-> **Optimizaciones de latencia/fluidez (sin tocar parámetros de Vosk):**
-> - `bufferFrames` 256 → **128** (8 ms de captura): el buffer llega antes al
->   reconocedor. **No afecta a Vosk** (acumula internamente; su único parámetro
->   fijo es la frecuencia 16 kHz, que se mantiene).
-> - `syllableMinMs` 50 → **40** (~25 sílabas/s; ≈ 2 frames a 60 fps, no se
->   comprime a 1 frame): la boca avanza más rápido.
+> **Optimizaciones de latencia/fluidez (sin tocar parámetros de Vosk y sin
+> reducir más el buffer):**
+> - **Boca por volumen (con histéresis):** la boca se ABRE al cruzar
+>   `mouthOpenThreshold` (default 0.05) y se CIERRA cuando el volumen cae por
+>   debajo de `mouthCloseThreshold` (default 0.02) durante `mouthReleaseMs`
+>   (default 160 ms). El avatar reacciona **al instante** al empezar a hablar,
+>   sin esperar a que Vosk confirme la primera palabra (~200–400 ms).
+> - **`syllableMinMs` 50 → 25** (~40 sílabas/s; ≈ 1.5 frames a 60 fps): la
+>   boca avanza muy rápido por la fila de sílabas. Si una palabra de N sílabas
+>   llega en un frame, se reproduce en N × 25 ms en vez de N × 50 ms.
+> - **Volumen/Vosk en el mismo hilo de audio, por buffer:** el hilo de audio ya
+>   hace `analyze()` + `acceptWaveForm()` secuencialmente por buffer
+>   (256 frames), así el reconocedor procesa cada chunk en cuanto llega.
 > - **UI sin "jank":** `tick()` y `applyViseme()` ya **no** hacen
 >   `setText()`/`setProgress()`/`setVisible()` en **cada frame** (~60/s); solo
 >   cuando el valor efectivamente cambia (`lastVisemeLabel`, umbral 0.002 en la
@@ -175,8 +190,12 @@ AvatarRenderer
 | `VoskRecognizer.current` | `volatile Viseme` | escrito por audio, leído por FX | No |
 | `VoskRecognizer.visemeQueue` | `ConcurrentLinkedQueue<Viseme>` | escrito audio, leído FX | No (cola) |
 | `PngVoiceApp.playbackQueue` | `ArrayDeque<Viseme>` | solo FX thread | No (fila de reproducción) |
-| `PngVoiceApp.lastSpoken` | `Viseme` | solo FX thread | No |
-| `PngVoiceApp.lastFinishNanos` | `long` | solo FX thread | No (marca fin de fila) |
+| `PngVoiceApp.lastSpoken` | `Viseme` | solo FX thread | No (última sílaba mostrada) |
+| `PngVoiceApp.mouthOpen` | `boolean` | solo FX thread | No (estado de la boca por volumen) |
+| `PngVoiceApp.mouthOpenThreshold` | `double` | solo FX thread | No (umbral de apertura) |
+| `PngVoiceApp.mouthCloseThreshold` | `double` | solo FX thread | No (umbral de cierre, histéresis) |
+| `PngVoiceApp.mouthReleaseMs` | `long` | solo FX thread | No (hold de cierre) |
+| `PngVoiceApp.lastMouthActivityNanos` | `long` | solo FX thread | No (marca de última actividad) |
 | `AppConfig` | POJO mutable | solo FX thread (config) | No |
 | `Avatar`, `SpriteSheet` | inmutables | — | Sí |
 

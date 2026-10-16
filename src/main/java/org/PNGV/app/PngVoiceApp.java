@@ -78,40 +78,26 @@ public class PngVoiceApp extends javafx.application.Application {
 
     // ---- Ritmo de los cambios de imagen (tiempo real) ----
     /**
-     * Duración (ms) que se mantiene la <b>última</b> imagen hablada antes de
-     * volver a NEUTRAL al llegar el silencio. Debe ser lo suficientemente
-     * larga para que el usuario la perciba (~12 frames a 60 fps) pero lo
-     * suficientemente corta para no retrasar la siguiente palabra.
-     *
-     * <p>Es el <b>default</b>; el valor efectivo se lee de la config
-     * ({@code silenceHoldMs}) al iniciar el micrófono y se guarda en el campo
-     * de instancia {@link #silenceHoldMs}.
-     */
-    private static final long SILENCE_HOLD_MS = 120;
-
-    /**
      * Duración mínima (ms) que se muestra <b>cada sílaba</b> (viseme) en la
      * cola de reproducción.
      *
-     * <p>Antes el {@link #tick} drenaba la cola entera y conservaba solo el
-     * <b>último</b> viseme: las sílabas intermedias de una palabra se
-     * descartaban en el mismo frame y la boca solo mostraba la última sílaba.
-     *
-     * <p>Ahora cada sílaba reconocida entra en una <b>fila de reproducción</b>
-     * y se muestra al menos {@code SYLLABLE_MIN_MS} ms antes de avanzar a la
+     * <p>Cada sílaba reconocida entra en una <b>fila de reproducción</b> y se
+     * muestra al menos {@code SYLLABLE_MIN_MS} ms antes de avanzar a la
      * siguiente. Así la boca se anima <b>sílaba a sílaba</b> (p. ej.
      * "gobierno" → O → E → O) y las sílabas repetidas (p. ej. "bajaban" →
      * A A A) se suman en tiempo, dando la ilusión de un sonido sostenido.
      *
-     * <p>El default 80 ms (~12 sílabas/s) es un poco más rápido que el habla
-     * natural (~150 ms) para que el cambio de imagen se sienta continuo y
-     * cercano a una persona pronunciando, sin "pulsos" entre sílaba y sílaba.
+     * <p>El default es <b>25 ms</b> (~40 sílabas/s), muy por debajo del ritmo
+     * del habla natural (~150 ms/sílaba), para que la secuencia de sílabas de
+     * una palabra se reproduzca casi al instante de reconocerse. A 60 fps un
+     * frame son ~16,7 ms, así que 25 ms ≈ 1.5 frames por sílaba: el cambio de
+     * imagen sigue siendo perceptible pero la boca avanza muy rápido.
      *
      * <p>Es el <b>default</b>; el valor efectivo se lee de la config
      * ({@code syllableMinMs}) al iniciar el micrófono y se guarda en el campo
      * de instancia {@link #syllableMinMs}.
      */
-    private static final long SYLLABLE_MIN_MS = 50;
+    private static final long SYLLABLE_MIN_MS = 25;
 
     /**
      * Visemes (grupos de letras) que se muestran como imágenes propias.
@@ -198,8 +184,34 @@ public class PngVoiceApp extends javafx.application.Application {
     // ---- Estado del ritmo de cambio de viseme (ver tick) ----
     /** Viseme actualmente visible en pantalla. */
     private Viseme currentVisible = Viseme.NEUTRAL;
-    /** true si el avatar está en modo "hablando" (viseme != NEUTRAL). */
-    private boolean isTalking = false;
+    /**
+     * true si la boca está en estado "abierta".
+     *
+     * <p><b>Se abre</b> cuando el volumen normalizado cruza
+     * {@link #mouthOpenThreshold} (reacción instantánea al empezar a hablar).
+     * <b>Se cierra</b> cuando durante {@link #mouthReleaseMs} ms no llega
+     * ninguna sílaba nueva de Vosk (ver {@link #lastMouthActivityNanos}).
+     *
+     * <p>El volumen <b>no</b> la mantiene abierta: si el micrófono tiene ruido
+     * de fondo por encima del umbral, la boca se abriría/cerraría
+     * intermitentemente pero <b>no</b> se quedaría "pegada" mostrando la
+     * última sílaba (bug de "no vuelve a NEUTRAL en silencio").
+     */
+    private boolean mouthOpen = false;
+    /**
+     * Última "actividad" de la boca (ns, AnimationTimer): el momento en que
+     * el volumen cruzó el umbral de apertura <b>o</b> llegó una sílaba nueva
+     * de Vosk a la fila de reproducción (paso 2 de {@link #tick}).
+     * Se usa para el hold de cierre ({@link #mouthReleaseMs}): si durante
+     * ese tiempo no se refresca, la boca se cierra → NEUTRAL.
+     */
+    private long lastMouthActivityNanos = 0L;
+    /** Umbral (0..1) para abrir la boca. Se refresca desde la config. */
+    private double mouthOpenThreshold = 0.05;
+    /** Umbral (0..1) para cerrar la boca (histéresis). Se refresca desde la config. */
+    private double mouthCloseThreshold = 0.02;
+    /** Tiempo (ms) que la boca se mantiene abierta tras la última actividad. Se refresca. */
+    private long mouthReleaseMs = 160L;
     /** Último viseme reflejado en la etiqueta "Viseme:" (evita setText por frame). */
     private Viseme lastVisemeLabel = null;
     /** Marca (ns, AnimationTimer) de cuándo se fijó la imagen visible actual. */
@@ -221,23 +233,17 @@ public class PngVoiceApp extends javafx.application.Application {
      * config al iniciar el micrófono (ver {@link #startMic()}).
      */
     private long syllableMinMs = SYLLABLE_MIN_MS;
-    /**
-     * Hold de silencio (ms) tras la última sílaba antes de volver a NEUTRAL.
-     * Se refresca desde la config al iniciar el micrófono.
-     */
-    private long silenceHoldMs = SILENCE_HOLD_MS;
 
     /**
-     * Última sílaba hablada (la más reciente mostrada). Se mantiene durante el
-     * {@link #SILENCE_HOLD_MS} de silencio antes de volver a NEUTRAL.
+     * Última sílaba <b>real</b> hablada (NEUTRAL no se guarda aquí). Se
+     * mantiene visible mientras la boca esté abierta ({@link #mouthOpen}) y
+     * no haya nuevas sílabas en la cola ({@link #playbackQueue}). Cuando la
+     * boca se cierra, el viseme visible pasa a NEUTRAL, pero {@code lastSpoken}
+     * se conserva para que, si el usuario sigue hablando, la boca pueda
+     * volver a mostrar esa última sílaba sin "parpadear" entre NEUTRAL y la
+     * siguiente palabra.
      */
     private Viseme lastSpoken = Viseme.NEUTRAL;
-    /**
-     * Marca (ns, AnimationTimer) del momento en que la fila de reproducción
-     * quedó vacía (terminó la última sílaba). A partir de aquí se cuenta el
-     * hold de silencio.
-     */
-    private long lastFinishNanos = 0L;
 
     // ---- Estado del grito (ver tick) ----
     /** true mientras el avatar está en un "episodio" de grito activo. */
@@ -493,34 +499,73 @@ public class PngVoiceApp extends javafx.application.Application {
     /**
      * Actualiza UI con el estado de volumen más reciente.
      *
-     * <p>Estrategia <b>sílaba a sílaba</b>: cada frame se drena la cola del
-     * reconocedor hacia una <b>fila de reproducción</b> ({@link #playbackQueue})
-     * y se avanza por ella mostrando cada sílaba al menos
-     * {@link #SYLLABLE_MIN_MS} ms. Así la boca se anima sílaba a sílaba
-     * (p. ej. "gobierno" → O → E → O) en vez de descartar todas menos la
-     * última, y las sílabas repetidas suman duración (ilusión de sonido
-     * sostenido).
-     *
-     * <ul>
-     *   <li>Al hablar: cada sílaba de la fila se muestra ~{@link #SYLLABLE_MIN_MS} ms.</li>
-     *   <li>Al terminar la fila: la última sílaba se mantiene
-     *       {@link #SILENCE_HOLD_MS} ms antes de pasar a NEUTRAL.</li>
-     *   <li>Grito: si el volumen normalizado alcanza el umbral, se muestra
-     *       la imagen de grito por encima del viseme normal.</li>
-     * </ul>
+     * <p>Estrategia <b>boca por volumen + sílabas de refino</b>:
+     * <ol>
+     *   <li>La boca se <b>abre</b> cuando el volumen normalizado cruza
+     *       {@link #mouthOpenThreshold} (reacción instantánea al hablar).
+     *       Se <b>cierra</b> cuando durante {@link #mouthReleaseMs} ms no
+     *       llega ninguna sílaba nueva de Vosk. El volumen <b>no</b> la
+     *       mantiene abierta: así el ruido de fondo (que no produce
+     *       sílabas) no impide que el avatar vuelva a NEUTRAL en silencio.</li>
+     *   <li>Se drena la cola del reconocedor hacia una <b>fila de
+     *       reproducción</b> ({@link #playbackQueue}). La fila se avanza a su
+     *       ritmo ({@link #syllableMinMs}) <b>siempre</b>, aunque la boca
+     *       esté cerrada, para no acumular sílabas obsoletas que luego se
+     *       mostrarían de golpe (tartamudeo).</li>
+     *   <li>El viseme a mostrar: boca cerrada → NEUTRAL; boca abierta + cola
+     *       no vacía → primera sílaba de la cola; boca abierta + cola vacía →
+     *       la última sílaba hablada (o NEUTRAL si nunca habló).</li>
+     *   <li>Grito: si el volumen normalizado alcanza el umbral y la boca
+     *       está abierta, se muestra la imagen de grito por encima del
+     *       viseme normal.</li>
+     * </ol>
      *
      * @param level      nivel de volumen 0-3 (no se usa para la boca, solo el
      *                   grito usa el nivel normalizado)
-     * @param normalized volumen normalizado 0..1 (para el grito)
+     * @param normalized volumen normalizado 0..1 (para la boca y el grito)
      * @param now        marca de tiempo del {@link AnimationTimer} (ns)
      */
     private void tick(int level, double normalized, long now) {
-        // ---- 1) Drenar la cola del reconocedor → fila de reproducción ----
-        // Se drena SIEMPRE (también en silencio) para no dejar sílabas
-        // "atrapadas" en la cola. Cada sílaba reconocida entra en
-        // {@link #playbackQueue} y se mostrará al menos SYLLABLE_MIN_MS ms
-        // (ver paso 2). Así la boca se anima sílaba a sílaba en vez de
-        // descartar todas menos la última.
+        // ---- 1) Estado de la boca ----
+        //
+        // <b>Abrir:</b> el volumen normalizado cruza {@link #mouthOpenThreshold}
+        // hacia arriba → la boca se abre <b>al instante</b>, sin esperar a que
+        // Vosk confirme la primera palabra (~200–400 ms). Esto da la sensación
+        // de reacción inmediata al empezar a hablar.
+        //
+        // <b>Mantener:</b> SOLO la llegada de sílabas nuevas (Vosk) mantiene la
+        // boca abierta. El volumen <b>NO</b> la mantiene: si el micrófono tiene
+        // ruido de fondo por encima de {@code mouthOpenThreshold} (muy común,
+        // ~-44 dBFS), el volumen se mantendría alto "eternamente" y la boca
+        // nunca cerraría → la imagen quedaba pegada en la última sílaba y
+        // <b>no volvía a NEUTRAL</b> en silencio (bug reportado).
+        //
+        // <b>Cerrar:</b> si durante {@link #mouthReleaseMs} ms no llega ninguna
+        // sílaba nueva, la boca se cierra → {@link Viseme#NEUTRAL}. Las sílabas
+        // solo llegan cuando hay voz real reconocida por Vosk; el ruido de fondo
+        // no produce sílabas, así que la boca se cierra correctamente en silencio.
+        if (!mouthOpen && normalized >= mouthOpenThreshold) {
+            // Primer disparo: abrir la boca al instante por volumen.
+            mouthOpen = true;
+            lastMouthActivityNanos = now;
+            // Resetear la última sílaba para no mostrar una sílaba "vieja" del
+            // turno anterior si el disparo fue por ruido de fondo (no por voz).
+            lastSpoken = Viseme.NEUTRAL;
+            if (playbackQueue.isEmpty()) {
+                visibleImageStartNanos = now;
+            }
+        } else if (mouthOpen) {
+            // Mantener abierta solo si hay actividad real (sílabas nuevas, que
+            // el paso 2 refresca en lastMouthActivityNanos). Si durante
+            // mouthReleaseMs no llega ninguna sílaba, cerrar → NEUTRAL.
+            if (elapsedMs(now, lastMouthActivityNanos) >= mouthReleaseMs) {
+                mouthOpen = false;
+            }
+        }
+
+        // ---- 2) Drenar la cola del reconocedor → fila de reproducción ----
+        // Las sílabas de Vosk refinen <b>qué forma de boca</b> se muestra,
+        // pero el estado abierto/cerrado ya lo controla el volumen (paso 1).
         boolean queueWasEmpty = playbackQueue.isEmpty();
         int drained = 0;
         Viseme first;
@@ -529,86 +574,60 @@ public class PngVoiceApp extends javafx.application.Application {
             drained++;
         }
         if (drained > 0) {
-            // Si la fila estaba vacía y ahora tiene sílabas nuevas, arranca el
-            // reloj de la primera desde AHORA. Si no lo hiciéramos,
-            // {@link #visibleImageStartNanos} seguiría con el timestamp de la
-            // última sílaba de hace un rato y, al entrar el paso 2,
-            // {@code elapsedMs >= syllableMinMs} sería true y se consumiría la
-            // sílaba nueva EN EL MISMO FRAME sin llegar a mostrarse. Eso era
-            // la causa de que las sílabas solitarias (p. ej. "de"→E)
-            // desaparecieran sin cambiar la imagen y de que en las de varias
-            // sílabas solo se viera la última.
+            // Una sílaba nueva también cuenta como "actividad" de la boca:
+            // mantiene la boca abierta aunque el volumen baje momentáneamente.
+            lastMouthActivityNanos = now;
             if (queueWasEmpty) {
                 visibleImageStartNanos = now;
-                isTalking = true;
             }
-            // Log de diagnóstico: cuántas sílabas llegaron a la fila en este
-            // frame. Si ves [VOSK] WORD pero NUNCA [UI] DRAIN, la cola no se
-            // está consumiendo (bug de threading / voskRecognizer nulo).
             LOG.info("[UI] DRAIN → {} sílaba(s) en la fila, primera: {}",
                     drained, playbackQueue.peekFirst());
         }
 
-        // ---- 2) Avanzar la fila de reproducción sílaba a sílaba ----
-        // Cada sílaba se muestra al menos SYLLABLE_MIN_MS ms antes de pasar a
-        // la siguiente. Las sílabas repetidas (mismo viseme) suman duración →
-        // ilusión de sonido sostenido. Al terminar la fila, la última sílaba
-        // se mantiene SILENCE_HOLD_MS ms y luego se vuelve a NEUTRAL.
+        // ---- 3) Avanzar la fila de reproducción SIEMPRE ----
+        //
+        // La fila se drena a su ritmo ({@code syllableMinMs}) <b>independiente</b>
+        // del estado de la boca: si la boca está cerrada y llegan sílabas,
+        // se avanzan igualmente para no acumular "visemes obsoletos" que luego
+        // se mostrarían de golpe (tartamudeo). El estado de la boca solo
+        // decide <b>qué</b> se muestra (paso 4), no <b>cuándo</b> se avanza.
         if (!playbackQueue.isEmpty()) {
-            isTalking = true;                       // el avatar está "hablando"
             if (elapsedMs(now, visibleImageStartNanos) >= syllableMinMs) {
-                playbackQueue.pollFirst();          // la sílaba actual terminó
-                visibleImageStartNanos = now;       // arranca la siguiente
+                playbackQueue.pollFirst();
+                visibleImageStartNanos = now;
             }
-            // Cuidado: el poll anterior puede haber vaciado la cola (era la
-            // última sílaba). En ese caso peekFirst() devolvería null y
-            // tumbaría el hilo JavaFX (NPE en displayName). Si la cola quedó
-            // vacía, caemos al caso de silencio/última sílaba hablada.
-            if (playbackQueue.isEmpty()) {
-                isTalking = false;
-                lastFinishNanos = now;
-                currentVisible = lastSpoken;        // la última sílaba hablada
-            } else {
-                currentVisible = playbackQueue.peekFirst();
-            }
-        } else {
-            // Fila vacía: se acaba de terminar la última sílaba (o nunca hubo
-            // habla). Marca el fin para arrancar el hold de silencio.
-            if (isTalking) {
-                isTalking = false;
-                lastFinishNanos = now;
-            }
-            long held = elapsedMs(now, lastFinishNanos);
-            if (held < silenceHoldMs) {
-                currentVisible = lastSpoken;        // la última sílaba hablada
-            } else {
-                currentVisible = Viseme.NEUTRAL;
-            }
-        }
-        if (currentVisible != lastSpoken) {
-            lastSpoken = currentVisible;
         }
 
-        // Grito: se muestra SOLO cuando el micrófono llega al <b>tope</b> de
-        // decibeles (normalizado >= gritoNormThreshold, cercano a escala
-        // completa / ~-20 dBFS). NO se dispara al hablar normal: ese rango
-        // queda muy por debajo del umbral. Si el usuario asignó alguna imagen
-        // de grito, se muestra por encima del viseme normal de habla; si no,
-        // se conserva el viseme habitual (el avatar no desaparece al gritar).
+        // ---- 4) Determinar el viseme a mostrar ----
         //
-        // Rotación entre variantes: el avatar puede tener hasta 3 imágenes de
-        // grito (GRITO, GRITO2, GRITO3). Al <b>iniciar</b> un episodio de grito
-        // se elige una al azar entre las disponibles y se <b>mantiene</b>
-        // mientras el grito continúe. Si el grito se detiene (cae por debajo
-        // del umbral) y luego vuelve a cruzarlo, se elige otra variante
-        // distinta si es posible, para dar sensación de "variación".
-        boolean screamNow = isTalking
+        // Prioridad:
+        //  1. Boca cerrada → NEUTRAL (el avatar no "habla").
+        //  2. Boca abierta + cola no vacía → primera sílaba de la cola.
+        //  3. Boca abierta + cola vacía → la última sílaba hablada (o
+        //     NEUTRAL si nunca habló), de modo que la boca no "parpadee"
+        //     esperando a que Vosk confirme la siguiente palabra.
+        Viseme visemeToShow;
+        if (!mouthOpen) {
+            visemeToShow = Viseme.NEUTRAL;
+        } else if (!playbackQueue.isEmpty()) {
+            visemeToShow = playbackQueue.peekFirst();
+        } else {
+            visemeToShow = lastSpoken;
+        }
+        // Refrescar lastSpoken solo con visemes reales (no NEUTRAL), para que
+        // en silencio la boca pueda volver a mostrar la última sílaba hablada
+        // si el usuario sigue hablando (sin que se haya "perdido" por el
+        // último NEUTRAL mostrado).
+        if (visemeToShow != Viseme.NEUTRAL) {
+            lastSpoken = visemeToShow;
+        }
+
+        // ---- 5) Grito (solo si la boca está abierta) ----
+        boolean screamNow = mouthOpen
                 && normalized >= gritoNormThreshold
                 && !availableScreams().isEmpty();
         if (screamNow) {
             if (!inScream) {
-                // Nuevo episodio de grito: elegir una variante (distinta a la
-                // anterior si hay al menos dos disponibles).
                 List<Viseme> pool = availableScreams();
                 Viseme pick;
                 if (pool.size() == 1) {
@@ -623,16 +642,14 @@ public class PngVoiceApp extends javafx.application.Application {
                 currentScream = pick;
                 inScream = true;
             }
-            currentVisible = currentScream;   // el grito se muestra por encima
+            visemeToShow = currentScream;
         } else {
             inScream = false;
         }
 
-        // Aplicar la imagen del viseme elegido en este frame.
+        // ---- 6) Aplicar el viseme elegido en este frame ----
+        currentVisible = visemeToShow;
         applyViseme(currentVisible);
-        // Solo actualizar la barra si el valor cambió de forma apreciable:
-        // setProgress() en cada frame (~60/s) fuerza invalidaciones y
-        // re-layouts innecesarios que se notan como "jank" (poco fluido).
         if (Math.abs(volumeBar.getProgress() - normalized) > 0.002) {
             volumeBar.setProgress(normalized);
         }
@@ -784,7 +801,7 @@ public class PngVoiceApp extends javafx.application.Application {
         // Amplitud objetivo: 1.0 mientras habla O mientras hay un grito activo
         // (el grito SIEMPRE vibra, incluso con el botón de vibración OFF);
         // 0.0 en silencio.
-        double target = (isTalking || inScream) ? 1.0 : 0.0;
+        double target = (mouthOpen || inScream) ? 1.0 : 0.0;
         if (target > imageWiggleAmp) {
             // Crece de forma suave (~0.3 s para llegar a pleno).
             imageWiggleAmp = Math.min(target, imageWiggleAmp + dt / 0.3);
@@ -934,7 +951,17 @@ public class PngVoiceApp extends javafx.application.Application {
             // Refrescar el ritmo de cambio de imagen desde la config (app.json),
             // con sanity clamps para que valores inválidos no tumben la animación.
             syllableMinMs = Math.max(1, config.getSyllableMinMs());
-            silenceHoldMs = Math.max(0, config.getSilenceHoldMs());
+            // Refrescar los parámetros de la boca por volumen (histéresis + hold):
+            // open > close siempre, y release >= 0.
+            mouthOpenThreshold = Math.max(0.0, Math.min(1.0, config.getMouthOpenThreshold()));
+            mouthCloseThreshold = Math.max(0.0, Math.min(mouthOpenThreshold, config.getMouthCloseThreshold()));
+            mouthReleaseMs = Math.max(0, config.getMouthReleaseMs());
+            // Reiniciar el estado de la boca al arrancar el micrófono.
+            mouthOpen = false;
+            lastMouthActivityNanos = 0L;
+            lastSpoken = Viseme.NEUTRAL;
+            playbackQueue.clear();
+            visibleImageStartNanos = 0L;
             VolumeAnalyzer analyzer = new VolumeAnalyzer(config);
 
             // Paso 1: intentar conectar VoskRecognizer si el modelo existe.
@@ -1058,6 +1085,12 @@ public class PngVoiceApp extends javafx.application.Application {
             }
             voskRecognizer = null;
         }
+        // Reiniciar el estado de la boca por volumen.
+        mouthOpen = false;
+        lastMouthActivityNanos = 0L;
+        lastSpoken = Viseme.NEUTRAL;
+        playbackQueue.clear();
+        visibleImageStartNanos = 0L;
         statusLabel.setText("Micrófono: OFF");
         toggleButton.setText("Iniciar micrófono");
         applyViseme(Viseme.NEUTRAL);
