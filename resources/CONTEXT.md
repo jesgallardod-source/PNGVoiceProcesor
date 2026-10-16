@@ -294,3 +294,17 @@ mvn clean package -Dskip.jpackage=true
 | `ConfigLoaderTest` (5 tests) | Save/load round-trip, defaults, custom values |
 | `AvatarRendererTest` (6 tests) | Placeholder rendering, estado, viseme→nombre |
 | `VoskRecognizerTest` (9 tests) | `extractText`: parseo JSON→texto de Vosk (`text`/`partial`, vacíos, texto plano, JSON inválido) |
+
+> **Logging (deduplicado):** `VoskRecognizer.acceptWaveForm()` loguea a nivel
+> **INFO** solo cuando el texto reconocido **cambia** (guard `lastLoggedText`).
+> El JSON crudo y el log MAPPED se eliminaron para reducir ruido.
+> Formato:
+> ```
+> [Vosk 1717050123456] PARTIAL text='hola'
+> [Vosk 1717050124000] FINAL   text='hola'
+> [Vosk 1717050125000] PARTIAL text='el'
+> [Vosk 1717050126000] PARTIAL text='el programa'
+> ```
+> Al llegar `FINAL` se reinicia `lastLoggedText=""` para que la siguiente
+> frase (aunque repita la misma palabra) se loguee de nuevo.
+> `updateViseme()` ya no loguea (solo mapea y encola).

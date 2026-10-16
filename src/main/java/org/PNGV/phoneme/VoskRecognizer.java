@@ -14,6 +14,7 @@ import org.vosk.Recognizer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
@@ -100,6 +101,12 @@ public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
     private volatile Viseme lastQueued = Viseme.NEUTRAL;
 
     /**
+     * Último texto logueado. Sirve para evitar repetir el log cuando
+     * {@code getPartialResult()} devuelve el mismo texto buffer tras buffer.
+     */
+    private volatile String lastLoggedText = "";
+
+    /**
      * Crea un reconocedor a partir de la ruta al modelo de Vosk.
      *
      * @param config configuración de la app (contiene {@code modelPath} y {@code sampleRate})
@@ -174,14 +181,26 @@ public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
             boolean endOfUtterance = recognizer.acceptWaveForm(pcm, length);
             if (endOfUtterance) {
                 // Resultado final: JSON con campo "text".
-                String text = extractText(recognizer.getResult());
+                String rawJson = recognizer.getResult();
+                String text = extractText(rawJson);
                 if (text != null && !text.isBlank()) {
+                    if (!text.equals(lastLoggedText)) {
+                        LOG.info("[Vosk {}] FINAL   text='{}'", System.currentTimeMillis(), text);
+                    }
+                    // Reinicia el guard para que la siguiente frase (aunque repita
+                    // la misma palabra) se loguee de nuevo.
+                    lastLoggedText = "";
                     updateViseme(text);
                 }
             } else {
                 // Resultado parcial: JSON con campo "partial".
-                String partial = extractText(recognizer.getPartialResult());
+                String rawJson = recognizer.getPartialResult();
+                String partial = extractText(rawJson);
                 if (partial != null && !partial.isBlank()) {
+                    if (!partial.equals(lastLoggedText)) {
+                        lastLoggedText = partial;
+                        LOG.info("[Vosk {}] PARTIAL text='{}'", System.currentTimeMillis(), partial);
+                    }
                     updateViseme(partial);
                 }
             }
@@ -311,4 +330,112 @@ public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
         int lastSpace = trimmed.lastIndexOf(' ');
         return lastSpace < 0 ? trimmed : trimmed.substring(lastSpace + 1).trim();
     }
+
+    // USER CODE//////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    public static ArrayList<String> dividirEnSilabas(String palabra) {
+        ArrayList<String> silabas = new ArrayList<>();
+        if (palabra == null || palabra.isEmpty()) return silabas;
+
+        String p = palabra.toLowerCase();
+        int i = 0;
+        int n = p.length();
+        int inicioSilaba = 0;
+
+        while (i < n) {
+            // Avanzar hasta encontrar una vocal (núcleo de la sílaba)
+            if (esVocal(p.charAt(i))) {
+
+                // Evaluar si la siguiente letra forma diptongo o hiato
+                if (i + 1 < n && esVocal(p.charAt(i + 1))) {
+                    if (esHiato(p.charAt(i), p.charAt(i + 1))) {
+                        // Si es hiato, la sílaba se corta justo después de la primera vocal
+                        silabas.add(palabra.substring(inicioSilaba, i + 1));
+                        inicioSilaba = i + 1;
+                        i++;
+                        continue;
+                    } else {
+                        // Si es diptongo, permanecen juntas en la misma sílaba
+                        i++;
+                    }
+                }
+
+                // Determinar cuántas consonantes siguen después de la(s) vocal(es)
+                int J = i + 1;
+                while (J < n && !esVocal(p.charAt(J))) {
+                    J++;
+                }
+                int numConsonantes = J - (i + 1);
+
+                // Decidir dónde cortar según el número de consonantes intermedias
+                int corte = J; // Por defecto corta justo antes de la siguiente vocal
+
+                if (numConsonantes == 1) {
+                    // VCV -> Corta antes de la consonante (V-CV)
+                    corte = i + 1;
+                } else if (numConsonantes == 2) {
+                    // VCCV -> Evalúa si las consonantes forman un grupo inseparable (bl, cr, tr...)
+                    if (esGrupoConsonanticoInseparable(p.substring(i + 1, i + 3))) {
+                        corte = i + 1; // V-CCV
+                    } else {
+                        corte = i + 2; // VC-CV
+                    }
+                } else if (numConsonantes == 3) {
+                    // VCCCV -> Generalmente las dos primeras se quedan y la tercera se va (VCC-CV)
+                    // Excepto si las dos últimas son inseparables (VC-CCV)
+                    if (esGrupoConsonanticoInseparable(p.substring(i + 2, i + 4))) {
+                        corte = i + 2;
+                    } else {
+                        corte = i + 3;
+                    }
+                } else if (numConsonantes == 4) {
+                    // VCCCCV -> Siempre se divide a la mitad (VCC-CCV) como en "abstracto"
+                    corte = i + 3;
+                }
+
+                // Evitar añadir sílabas vacías o desbordamientos al final de la palabra
+                if (J == n) {
+                    silabas.add(palabra.substring(inicioSilaba, n));
+                    break;
+                } else {
+                    silabas.add(palabra.substring(inicioSilaba, corte));
+                    inicioSilaba = corte;
+                    i = corte - 1;
+                }
+            }
+            i++;
+        }
+        return silabas;
+    }
+
+    private static boolean esVocal(char c) {
+        return "aeiouáéíóúü".indexOf(c) != -1;
+    }
+
+    private static boolean esVocalFuerte(char c) {
+        return "aeoáéó".indexOf(c) != -1;
+    }
+
+    private static boolean esHiato(char v1, char v2) {
+        // Dos fuertes siempre se separan (ca-os, po-e-ma)
+        if (esVocalFuerte(v1) && esVocalFuerte(v2)) return true;
+        // Una vocal débil con tilde unida a una fuerte se separa (tí-o, grú-a)
+        if ("áéó".indexOf(v1) != -1 && "íú".indexOf(v2) != -1) return false; // Diptongo decreciente
+        if ("íú".indexOf(v1) != -1 && esVocalFuerte(v2)) return true; // Hiato acentual (dí-a)
+        if (esVocalFuerte(v1) && "íú".indexOf(v2) != -1) return true; // Hiato acentual (re-ú-ne)
+        return false;
+    }
+
+    private static boolean esGrupoConsonanticoInseparable(String par) {
+        if (par.length() < 2) return false;
+        char c1 = par.charAt(0);
+        char c2 = par.charAt(1);
+        // Combinaciones de consonante + L o R que no se pueden separar (ej: bra, cla, pro)
+        return (c2 == 'r' && "bcdfgpt".indexOf(c1) != -1) ||
+                (c2 == 'l' && "bcfgpl".indexOf(c1) != -1) ||
+                (c1 == 'c' && c2 == 'h') ||
+                (c1 == 'l' && c2 == 'l') ||
+                (c1 == 'r' && c2 == 'r');
+    }
+
 }

@@ -1343,7 +1343,6 @@ public class PngVoiceApp extends javafx.application.Application {
         imageHolder.setImage(blinkImage);
         imageHolder.setVisible(true);
         imageHolder.toFront();
-        LOG.debug("Blink: mostrando imagen de parpadeo");
     }
 
     /** Restaura la imagen que estaba antes del parpadeo. */
@@ -1356,7 +1355,6 @@ public class PngVoiceApp extends javafx.application.Application {
         if (preBlinkImage == null) {
             imageHolder.setVisible(false);
         }
-        LOG.debug("Blink: imagen restaurada");
     }
 
     /**
