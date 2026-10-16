@@ -190,10 +190,11 @@ public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
                     // Reinicia el guard para que la siguiente frase (aunque repita
                     // la misma palabra) se loguee de nuevo.
                     lastLoggedText = "";
-                    updateViseme(text);
+                    // Mapea la última palabra en sílabas y encola un viseme por sílaba.
+                    updateVisemesFromSyllables(text);
                 }
             } else {
-                // Resultado parcial: JSON con campo "partial".
+                // Resultado parcial: solo loguea (no actualiza viseme).
                 String rawJson = recognizer.getPartialResult();
                 String partial = extractText(rawJson);
                 if (partial != null && !partial.isBlank()) {
@@ -201,7 +202,6 @@ public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
                         lastLoggedText = partial;
                         LOG.info("[Vosk {}] PARTIAL text='{}'", System.currentTimeMillis(), partial);
                     }
-                    updateViseme(partial);
                 }
             }
             return endOfUtterance;
@@ -285,6 +285,75 @@ public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
             lastQueued = v;
             visemeQueue.offer(v);
         }
+    }
+
+    /**
+     * Toma la última palabra del texto, la divide en sílabas con
+     * {@link #dividirEnSilabas(String)} y encola un viseme por cada sílaba
+     * en orden de pronunciación.
+     *
+     * <p>Regla de viseme por sílaba:
+     * <ul>
+     *   <li>3 o más letras → la <b>letra central</b> (índice {@code len/2})</li>
+     *   <li>2 letras        → la <b>última letra</b></li>
+     *   <li>1 letra         → esa misma letra</li>
+     * </ul>
+     *
+     * @param text texto completo reconocido (p. ej. "el programa")
+     */
+    private void updateVisemesFromSyllables(String text) {
+        if (text == null || text.isBlank()) {
+            return;
+        }
+        String lastWord = lastWord(text);
+        java.util.List<String> syllables = dividirEnSilabas(lastWord);
+        if (syllables.isEmpty()) {
+            return;
+        }
+
+        // Construye el log y encola cada viseme en orden.
+        StringBuilder sb = new StringBuilder();
+        Viseme lastViseme = Viseme.NEUTRAL;
+        for (String syl : syllables) {
+            Viseme v = visemeFromSyllable(syl);
+            if (sb.length() > 0) sb.append(" ");
+            sb.append("'").append(syl).append("'→").append(v);
+            lastViseme = v;
+            if (v != lastQueued) {
+                lastQueued = v;
+                visemeQueue.offer(v);
+            }
+        }
+
+        this.current = lastViseme;
+        LOG.info("[Vosk {}] SYLLABLES '{}' → [{}]", System.currentTimeMillis(), lastWord, sb);
+    }
+
+    /**
+     * Devuelve el viseme correspondiente a una sílaba según la regla:
+     * <ul>
+     *   <li>1 letra        → esa letra</li>
+     *   <li>2 letras       → la <b>última</b></li>
+     *   <li>3+ letras      → la <b>central</b> (índice {@code len/2})</li>
+     * </ul>
+     *
+     * @param syllable sílaba (p. ej. "pro", "ma", "ho")
+     * @return viseme, o {@link Viseme#NEUTRAL} si no se puede determinar
+     */
+    static Viseme visemeFromSyllable(String syllable) {
+        if (syllable == null || syllable.isBlank()) {
+            return Viseme.NEUTRAL;
+        }
+        String s = syllable.toLowerCase();
+        int len = s.length();
+        if (len == 1) {
+            return Viseme.fromLetter(s.charAt(0));
+        }
+        if (len == 2) {
+            return Viseme.fromLetter(s.charAt(1));   // última letra
+        }
+        // 3+ letras: letra central
+        return Viseme.fromLetter(s.charAt(len / 2));
     }
 
     @Override
