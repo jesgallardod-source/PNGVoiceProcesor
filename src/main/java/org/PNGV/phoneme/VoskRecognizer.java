@@ -371,8 +371,17 @@ public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
         // <b>ilusión de un sonido sostenido</b>.
         StringBuilder sb = new StringBuilder();
         Viseme lastViseme = Viseme.NEUTRAL;
-        for (String syl : syllables) {
+        int total = syllables.size();
+        for (int idx = 0; idx < total; idx++) {
+            String syl = syllables.get(idx);
             Viseme v = visemeFromSyllable(syl);
+            // Regla extra: si la ÚLTIMA sílaba de la palabra termina en 's'
+            // (plural / terminaciones en -s), el viseme de esa sílaba SIEMPRE
+            // es la imagen de la letra S (boca estrecha / intermedia). Así la
+            // frase termina siempre mostrando la forma de boca de la 's'.
+            if (idx == total - 1 && terminaEnEs(syl)) {
+                v = Viseme.S;
+            }
             if (sb.length() > 0) sb.append(" ");
             sb.append("'").append(syl).append("'→").append(v);
             lastViseme = v;
@@ -540,6 +549,30 @@ public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
         }
         // Sin vocales: la del medio (fallback)
         return Viseme.fromLetter(s.charAt(mid));
+    }
+
+    /**
+     * Indica si una sílaba termina en la letra <b>'s'</b> (mayúscula o
+     * minúscula).
+     *
+     * <p>Se usa en la regla de terminación de frase: cuando la <b>última</b>
+     * sílaba de la palabra termina en 's' (plurales y terminaciones en -s),
+     * el viseme de esa sílaba se fuerza a {@link Viseme#S} para que la frase
+     * termine siempre mostrando la imagen de la letra S.
+     *
+     * @param syllable sílaba (p. ej. "mas", "los", "ba")
+     * @return true si la sílaba no está vacía y su última letra es 's'
+     */
+    static boolean terminaEnEs(String syllable) {
+        if (syllable == null) {
+            return false;
+        }
+        String s = syllable.trim();
+        if (s.isEmpty()) {
+            return false;
+        }
+        char last = Character.toLowerCase(s.charAt(s.length() - 1));
+        return last == 's';
     }
 
     /**

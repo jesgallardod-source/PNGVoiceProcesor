@@ -230,6 +230,39 @@ class VoskRecognizerTest {
         assertEquals(Viseme.NEUTRAL, VoskRecognizer.visemeFromSyllable("   "));
     }
 
+    // ================================================================
+    // Tests de la regla "última sílaba termina en S → viseme S"
+    // ================================================================
+
+    @Test
+    @DisplayName("terminaEnEs: sílaba que termina en 's' (minúscula) → true")
+    void terminaEnEs_lowercase() {
+        assertTrue(VoskRecognizer.terminaEnEs("mas"));
+        assertTrue(VoskRecognizer.terminaEnEs("s"));
+    }
+
+    @Test
+    @DisplayName("terminaEnEs: sílaba que termina en 'S' (mayúscula) → true")
+    void terminaEnEs_uppercase() {
+        assertTrue(VoskRecognizer.terminaEnEs("MAS"));
+        assertTrue(VoskRecognizer.terminaEnEs("S"));
+    }
+
+    @Test
+    @DisplayName("terminaEnEs: sílaba que no termina en 's' → false")
+    void terminaEnEs_notEndingInS() {
+        assertTrue(!VoskRecognizer.terminaEnEs("ma"));
+        assertTrue(!VoskRecognizer.terminaEnEs("ba"));
+    }
+
+    @Test
+    @DisplayName("terminaEnEs: null / vacía / solo espacios → false")
+    void terminaEnEs_nullAndEmpty() {
+        assertTrue(!VoskRecognizer.terminaEnEs(null));
+        assertTrue(!VoskRecognizer.terminaEnEs(""));
+        assertTrue(!VoskRecognizer.terminaEnEs("   "));
+    }
+
     @Test
     @DisplayName("Sílabas típicas del español: 'ba'→A, 'pro'→P(BMP), 'ma'→A, 'ta'→A")
     void spanishSyllables_typical() {
