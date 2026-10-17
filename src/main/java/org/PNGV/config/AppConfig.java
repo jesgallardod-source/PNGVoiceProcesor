@@ -148,7 +148,7 @@ public class AppConfig {
      * mantiene. Chunks más pequeños también aligeran el hilo de audio
      * (menos CPU por buffer) dejando margen para que el pipeline responda.
      */
-    private int bufferFrames = 128;
+    private int bufferFrames = 16;
     /**
      * Frecuencia de muestreo. <b>Debe coincidir con la frecuencia con la que
      * está entrenado el modelo de Vosk</b> (ver {@code conf/mfcc.conf} del
