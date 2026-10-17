@@ -300,6 +300,12 @@ public class PngVoiceApp extends javafx.application.Application {
     private Label letterCountLabel;         // contador "n / total"
     private Label letterPathLabel;          // ruta del archivo asignado (o "sin imagen")
 
+    // ---- Sliders de sensibilidad (dentro del panel de imágenes) ----
+    private Slider mouthCloseSlider;        // umbral de cierre de la boca (0..open)
+    private Label mouthCloseValueLabel;     // valor numérico actual del umbral de cierre
+    private Slider screamSlider;            // umbral de grito (0.5..1.0)
+    private Label screamValueLabel;         // valor numérico actual del umbral de grito
+
     private Scene scene;
     private Stage stage;
 
@@ -485,7 +491,7 @@ public class PngVoiceApp extends javafx.application.Application {
         root.setStyle("-fx-background-color: transparent;");
 
         Color bgColor = safeColor(config.getBackgroundColor(), Color.web("#00FF00"));
-        scene = new Scene(root, 1024, 880, bgColor);
+        scene = new Scene(root, 1024, 960, bgColor);
         this.stage = stage;
         stage.setScene(scene);
         stage.setTitle("PNGVoice");
@@ -1341,6 +1347,56 @@ public class PngVoiceApp extends javafx.application.Application {
         HBox adminRow2 = new HBox(8, deleteButton);
         adminRow2.setHgrow(deleteButton, javafx.scene.layout.Priority.ALWAYS);
 
+        // ---- Sección de sensibilidad: sliders para ajuste manual ----
+        Label sensTitle = new Label("Sensibilidad");
+        sensTitle.setStyle("-fx-font-size: 15px; -fx-font-weight: bold; -fx-text-fill: #cdd6f4;");
+
+        // --- Slider: umbral de cierre de la boca ---
+        // Cuanto más bajo, antes cierra la boca al dejar de hablar.
+        mouthCloseValueLabel = new Label();
+        mouthCloseValueLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: #a6e3a1;");
+
+        mouthCloseSlider = new Slider(0.0, 1.0, Math.min(1.0, mouthCloseThreshold));
+        mouthCloseSlider.setMaxWidth(Double.MAX_VALUE);
+        mouthCloseSlider.setStyle("-fx-control-inner-background: #2a2a3a;");
+        mouthCloseSlider.valueProperty().addListener((obs, oldV, newV) -> {
+            double v = newV.doubleValue();
+            applyMouthCloseThreshold(v);
+            if (mouthCloseValueLabel != null) {
+                mouthCloseValueLabel.setText(String.format("Umbral cierre boca: %.2f", v));
+            }
+        });
+        mouthCloseValueLabel.setText(String.format("Umbral cierre boca: %.2f", mouthCloseSlider.getValue()));
+        Label mouthCloseCaption = new Label("Cierre de la boca (más bajo = cierra antes)");
+        mouthCloseCaption.setStyle("-fx-font-size: 12px; -fx-text-fill: #cdd6f4;");
+        VBox mouthCloseBox = new VBox(4,
+                mouthCloseCaption,
+                mouthCloseSlider,
+                mouthCloseValueLabel);
+
+        // --- Slider: umbral de grito ---
+        // Cuanto más bajo, antes dispara el grito al subir el volumen.
+        screamValueLabel = new Label();
+        screamValueLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: #f38ba8;");
+
+        screamSlider = new Slider(0.0, 1.0, Math.max(0.0, Math.min(1.0, gritoNormThreshold)));
+        screamSlider.setMaxWidth(Double.MAX_VALUE);
+        screamSlider.setStyle("-fx-control-inner-background: #2a2a3a;");
+        screamSlider.valueProperty().addListener((obs, oldV, newV) -> {
+            double v = newV.doubleValue();
+            applyScreamThreshold(v);
+            if (screamValueLabel != null) {
+                screamValueLabel.setText(String.format("Umbral grito: %.2f", v));
+            }
+        });
+        screamValueLabel.setText(String.format("Umbral grito: %.2f", screamSlider.getValue()));
+        Label screamCaption = new Label("Grito (más bajo = grita antes)");
+        screamCaption.setStyle("-fx-font-size: 12px; -fx-text-fill: #cdd6f4;");
+        VBox screamBox = new VBox(4,
+                screamCaption,
+                screamSlider,
+                screamValueLabel);
+
         // ---- Ensamblado del panel ----
         VBox panel = new VBox(10,
                 title,
@@ -1351,7 +1407,11 @@ public class PngVoiceApp extends javafx.application.Application {
                 navRow,
                 adminRow1,
                 adminRow2,
-                letterPathLabel);
+                letterPathLabel,
+                new javafx.scene.control.Separator(),
+                sensTitle,
+                mouthCloseBox,
+                screamBox);
         panel.setPadding(new Insets(12));
         panel.setStyle("-fx-background-color: #2b2b2b; -fx-background-radius: 10;");
         panel.setPrefWidth(280);
@@ -1375,6 +1435,51 @@ public class PngVoiceApp extends javafx.application.Application {
         }
         togglePanelButton.setText(letterPanelVisible ? "Ocultar panel" : "Mostrar panel");
         LOG.info("Panel de letras {}", letterPanelVisible ? "mostrado" : "ocultado");
+    }
+
+    /**
+     * Aplica (de inmediato) y persiste el <b>umbral de cierre de la boca</b>
+     * (histéresis). Se limita al rango {@code [0, mouthOpenThreshold]} para no
+     * romper la histéresis (close ≤ open).
+     *
+     * @param value  valor normalizado (0..1) elegido en el slider
+     */
+    private void applyMouthCloseThreshold(double value) {
+        double clamped = Math.max(0.0, Math.min(mouthOpenThreshold, value));
+        // Aplicar de inmediato (el tick() lee este campo en el siguiente frame).
+        mouthCloseThreshold = clamped;
+        // Persistir en la config.
+        try {
+            ConfigLoader loader = new ConfigLoader();
+            AppConfig cfg = loader.load(configPath);
+            cfg.setMouthCloseThreshold(clamped);
+            loader.save(configPath, cfg);
+        } catch (RuntimeException e) {
+            LOG.warn("No se pudo persistir el umbral de cierre de la boca", e);
+        }
+        LOG.info("Umbral de cierre de la boca: {}", clamped);
+    }
+
+    /**
+     * Aplica (de inmediato) y persiste el <b>umbral de grito</b> (volumen
+     * normalizado 0..1 a partir del cual se muestra la imagen de grito).
+     *
+     * @param value valor normalizado (0..1) elegido en el slider
+     */
+    private void applyScreamThreshold(double value) {
+        double clamped = Math.max(0.0, Math.min(1.0, value));
+        // Aplicar de inmediato (el tick() lee este campo en el siguiente frame).
+        gritoNormThreshold = clamped;
+        // Persistir en la config.
+        try {
+            ConfigLoader loader = new ConfigLoader();
+            AppConfig cfg = loader.load(configPath);
+            cfg.setScreamThreshold(clamped);
+            loader.save(configPath, cfg);
+        } catch (RuntimeException e) {
+            LOG.warn("No se pudo persistir el umbral de grito", e);
+        }
+        LOG.info("Umbral de grito: {}", clamped);
     }
 
     /** Cambia la entrada en foco (±1) con repetición circular. */
