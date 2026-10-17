@@ -288,6 +288,14 @@ public class PngVoiceApp extends javafx.application.Application {
     private ComboBox<String> micBox;    // selector de micrófono (dropdown)
     /** true si la vibración (agitamiento) del avatar está habilitada. */
     private boolean vibrationEnabled = true;
+    /**
+     * true si, al detectar sonido sin sílaba reconocida, el avatar muestra la
+     * letra A (boca abierta) para que la animación haga match con el sonido.
+     * Se refresca desde la config ({@code soundSyncLetterEnabled}) al iniciar
+     * el micrófono. Si es {@code false}, en ese caso se muestra NEUTRAL en vez
+     * de A (útil para testing: la boca solo reacciona a sílabas reales).
+     */
+    private boolean soundSyncLetterEnabled = true;
     private Label rightLetterLabel;    // etiqueta del panel derecho con la letra actual
 
     // ---- Panel lateral (slider) de administración de imágenes por letra ----
@@ -704,7 +712,7 @@ public class PngVoiceApp extends javafx.application.Application {
             // del hold): mostrarla. Así la boca sigue mostrando la letra
             // correcta mientras la palabra se sigue pronunciando.
             visemeToShow = lastSpoken;
-        } else {
+        } else if (soundSyncLetterEnabled) {
             // Boca abierta pero sin sílaba reciente: el usuario está haciendo
             // un sonido sostenido (nota de canción, grito, "Aaaaaa"...) y
             // Vosk aún no ha reconocido una palabra nueva (o la última sílaba
@@ -713,6 +721,12 @@ public class PngVoiceApp extends javafx.application.Application {
             // natural para un sonido sostenido. Cuando Vosk produzca el
             // resultado, se mostrará la letra correcta.
             visemeToShow = Viseme.A;
+        } else {
+            // Función "letra A al sonar" desactivada (soundSyncLetterEnabled =
+            // false, p. ej. para testing): no mostramos ninguna letra genérica,
+            // la boca se queda en NEUTRAL hasta que Vosk produzca una sílaba
+            // real.
+            visemeToShow = Viseme.NEUTRAL;
         }
         // Refrescar lastSpoken solo con visemes reales (no NEUTRAL), para que
         // en silencio la boca pueda volver a mostrar la última sílaba hablada
@@ -1056,6 +1070,9 @@ public class PngVoiceApp extends javafx.application.Application {
             mouthOpenThreshold = Math.max(0.0, Math.min(1.0, config.getMouthOpenThreshold()));
             mouthCloseThreshold = Math.max(0.0, Math.min(mouthOpenThreshold, config.getMouthCloseThreshold()));
             mouthReleaseMs = Math.max(0, config.getMouthReleaseMs());
+            // Refrescar la función "letra A al detectar sonido" (activable/
+            // desactivable en app.json para testing).
+            soundSyncLetterEnabled = config.isSoundSyncLetterEnabled();
             // Reiniciar el estado de la boca al arrancar el micrófono.
             mouthOpen = false;
             lastMouthActivityNanos = 0L;

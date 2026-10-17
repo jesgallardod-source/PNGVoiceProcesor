@@ -1,5 +1,6 @@
 package org.PNGV.config;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 
@@ -16,8 +17,15 @@ import java.util.Objects;
  */
 public class ConfigLoader {
 
+    // FAIL_ON_UNKNOWN_PROPERTIES = false: si la app.json del usuario contiene
+    // claves que ya no existen en AppConfig (p. ej. la clave legacy
+    // "agraceDelayEnabled" de una versión anterior de la "letra A al sonar"),
+    // se IGNORAN en vez de lanzar UnrecognizedPropertyException y tumbar la app
+    // al arrancar. Es la regla de compatibilidad hacia adelante: una config
+    // "más vieja" o con campos huérfanos nunca debe impedir el arranque.
     private final ObjectMapper mapper = new ObjectMapper()
-            .enable(SerializationFeature.INDENT_OUTPUT);
+            .enable(SerializationFeature.INDENT_OUTPUT)
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
 
     /**
      * Carga la configuración desde {@code path}. Si no existe, crea el archivo

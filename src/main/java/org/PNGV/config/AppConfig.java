@@ -176,6 +176,22 @@ public class AppConfig {
     private boolean vibrationEnabled = true;
 
     /**
+     * Indica si, al detectar <b>sonido</b> pero sin que el reconocedor (Vosk)
+     * haya identificado todavía una sílaba, el avatar muestra la forma genérica
+     * de <b>boca abierta (letra A)</b> para que la animación "haga match" con
+     * el sonido y parezca sincronizado.
+     *
+     * <p>{@code true} (por defecto) = se muestra la letra A mientras hay sonido
+     * sostenido sin palabra reconocida (comportamiento natural).
+     * {@code false} = NO se muestra ninguna letra en ese caso: el avatar se
+     * queda en NEUTRAL (boca cerrada) hasta que Vosk produzca una sílaba real.
+     *
+     * <p>Útil para <b>propósitos de testing</b>: desactivando esta función se
+     * evita la "letra A aleatoria" y la boca solo reacciona a sílabas reales.
+     */
+    private boolean soundSyncLetterEnabled = true;
+
+    /**
      * Nombre del micrófono seleccionado (el nombre que muestra
      * {@link javax.sound.sampled.Mixer.Info#getName()}).
      * <p>{@code null} o cadena vacía = usar el micrófono por defecto del sistema.
@@ -239,6 +255,9 @@ public class AppConfig {
 
     public boolean isVibrationEnabled() { return vibrationEnabled; }
     public void setVibrationEnabled(boolean vibrationEnabled) { this.vibrationEnabled = vibrationEnabled; }
+
+    public boolean isSoundSyncLetterEnabled() { return soundSyncLetterEnabled; }
+    public void setSoundSyncLetterEnabled(boolean soundSyncLetterEnabled) { this.soundSyncLetterEnabled = soundSyncLetterEnabled; }
 
     public String getSelectedMic() { return selectedMic; }
     public void setSelectedMic(String selectedMic) { this.selectedMic = selectedMic; }

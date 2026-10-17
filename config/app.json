@@ -10,6 +10,7 @@
   "mouthOpenThreshold" : 0.05,
   "mouthCloseThreshold" : 0.25,
   "mouthReleaseMs" : 160,
+  "soundSyncLetterEnabled" : false,
   "modelPath" : "assets/models/vosk-model-small-es-0.42",
   "activeAvatar" : "assets/avatars/avatar1.png",
   "backgroundColor" : "#00FF00",
