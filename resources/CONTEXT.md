@@ -49,7 +49,8 @@ Sin internet, sin servidores. Todo local.
 │      └──► AudioFrameProcessor.process(byte[], int)  [callback]            │
 │              └──► VoskRecognizer.acceptWaveForm()                          │
 │                      └──► Vosk: getPartialResult() / getResult()          │
-│                            └──► Viseme.fromLetter(primeraLetra)           │
+│                            └──► dividirEnSilabas() → por sílaba:          │
+│                                  visemeFromSyllable() (vocal dominante)   │
 │                                  └──► ConcurrentLinkedQueue<Viseme>       │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -67,7 +68,7 @@ Sin internet, sin servidores. Todo local.
 │              3) viseme a mostrar:                                           │
 │                   boca cerrada → NEUTRAL                                    │
 │                   boca abierta + sílabas → siguiente de la fila             │
-│                       (cada sílaba ~syllableMinMs, default 25 ms)          │
+│                       (cada sílaba ~syllableMinMs, default 60 ms)          │
 │                   boca abierta + sin sílabas → lastSpoken                   │
 │              4) grito (si volumen ≥ gritoNormThreshold y boca abierta)      │
 │              5) applyViseme(viseme)  (imagen por viseme, o NEUTRAL)         │
@@ -82,7 +83,7 @@ Sin internet, sin servidores. Todo local.
 más el buffer de captura. La latencia total = buffer de captura +
 reconocimiento (Vosk) + `syllableMinMs`. Con los defaults actuales:
 **buffer de 256 frames a 16 kHz = ~16 ms de captura** + reconocimiento
-(Vosk, ~10–30 ms según carga) + **`syllableMinMs` 25 ms de animación** →
+(Vosk, ~10–30 ms según carga) + **`syllableMinMs` 60 ms de animación** →
 ~50–70 ms de boca por sílaba.
 
 > **Optimizaciones de latencia/fluidez (sin tocar parámetros de Vosk y sin
@@ -92,9 +93,11 @@ reconocimiento (Vosk) + `syllableMinMs`. Con los defaults actuales:
 >   debajo de `mouthCloseThreshold` (default 0.02) durante `mouthReleaseMs`
 >   (default 160 ms). El avatar reacciona **al instante** al empezar a hablar,
 >   sin esperar a que Vosk confirme la primera palabra (~200–400 ms).
-> - **`syllableMinMs` 50 → 25** (~40 sílabas/s; ≈ 1.5 frames a 60 fps): la
->   boca avanza muy rápido por la fila de sílabas. Si una palabra de N sílabas
->   llega en un frame, se reproduce en N × 25 ms en vez de N × 50 ms.
+> - **`syllableMinMs` = 60 ms** (~16.7 sílabas/s; ≈ 3.6 frames a 60 fps): cada
+>   forma de boca se muestra ~60 ms, lo bastante lento para verse natural (sin
+>   "parpadeo" a 40 sílabas/s) pero aún por debajo del ritmo del habla natural
+>   (~150 ms/sílaba). Si una palabra de N sílabas llega en un frame, se
+>   reproduce en N × 60 ms.
 > - **Volumen/Vosk en el mismo hilo de audio, por buffer:** el hilo de audio ya
 >   hace `analyze()` + `acceptWaveForm()` secuencialmente por buffer
 >   (256 frames), así el reconocedor procesa cada chunk en cuanto llega.
@@ -246,7 +249,7 @@ Archivo: `config/app.json` (creado automáticamente con defaults si no existe).
 | `backgroundColor` | `#00FF00` | Fondo croma-key |
 | `visemeImages` | `{}` | Mapa viseme→ruta PNG (placeholder si vacío) |
 | `vibrationEnabled` | `true` | Vibración (agitamiento) del avatar al hablar: ON/OFF (botón en la UI). **No afecta al grito**: cuando el avatar está en un episodio de grito activo, la imagen SIEMPRE vibra aunque el botón esté OFF (ver `updateImageWiggle`). |
-| `syllableMinMs` | `40` | Duración mínima (ms) de **cada sílaba** en la fila de reproducción antes de avanzar a la siguiente. Más bajo = boca más fluida (más sílabas/s). A 60 fps, 40 ms ≈ 2 frames/sílaba (no se comprime a 1 frame). **No es parámetro de Vosk**, solo el ritmo de animación de la UI. Se refresca en `startMic()` → campo `PngVoiceApp.syllableMinMs`. |
+| `syllableMinMs` | `60` | Duración mínima (ms) de **cada sílaba** en la fila de reproducción antes de avanzar a la siguiente. Más bajo = boca más veloz (más sílabas/s); más alto = más natural. El default es **60 ms** (~16.7 sílabas/s ≈ 3.6 frames a 60 fps): cada forma de boca se percibe claramente sin verse "a pulsos". **No es parámetro de Vosk**, solo el ritmo de animación de la UI. Se refresca en `startMic()` → campo `PngVoiceApp.syllableMinMs`. |
 | `silenceHoldMs` | `200` | Hold (ms) que se mantiene la última sílaba antes de volver a NEUTRAL. **Si la siguiente sílaba llega dentro de este tiempo, el avatar NO vuelve a NEUTRAL**: conserva la última boca hasta que llegue la siguiente (movimiento continuo, sin "parpadeo" a boca cerrada). Solo las pausas reales (> hold) cierran la boca. 200 ms cubre las pausas típicas entre sílabas/palabras (~80–160 ms). Se refresca en `startMic()` → campo `PngVoiceApp.silenceHoldMs`. |
 
 ---
@@ -258,14 +261,14 @@ Archivo: `config/app.json` (creado automáticamente con defaults si no existe).
 | **16 kHz, no 44.1 kHz** | Vosk `vosk-model-small-es-0.42` está entrenado a 16 kHz. Vosk **no hace re-muestreo interno**: a 44.1 kHz el modelo interpreta la señal acelerada y produce texto aleatorio. |
 | **Verificar `line.getFormat().getSampleRate()` tras `open()`** | `TargetDataLine.open(format)` puede "exitosamente" abrir la línea entregando otra frecuencia (SRC interna del SO en Windows/WASAPI) sin lanzar excepción. `AudioCapture.openLine()` lee la frecuencia real y construye el `SampleRateFilter` con ella, no con la pedida. Fallbacks probados: 32k → 48k → 44.1k → 8k (32k es el más cercano a 16k, mejor calidad de interpolación). |
 | **10 visemes (no 12+ columnas)** | En 2D, separar S/C/D/G/K/N/T/X/Y/Z/H/Q/W en formas de boca distintas no aporta movimiento visible. Agrupar en BMP/FV/L/S + 5 vocales + NEUTRAL es suficiente. |
-| **Primera letra de la última palabra** (VoskRecognizer) | Es el "ataque" de la sílaba, la forma de boca más reconocible. Simple y suficiente para v1. (El `SyllableSplitter.dominantViseme()` por apertura de vocal existe pero no se usa en el pipeline actual.) |
+| **Viseme por sílaba con prioridad a vocal dominante** (`VoskRecognizer.visemeFromSyllable`) | Cada sílaba producida por `dividirEnSilabas()` se mapea a un viseme eligiendo la **vocal dominante** según la longitud: **1 letra** → esa letra; **2 letras** → la vocal (si dos, la última); **3 letras** → la del medio (índice 1), si no es vocal busca la vocal en las otras posiciones (si dos, aleatoria); **4 letras** → entre las 2 del medio (índices 1 y 2), prefiere vocal (si dos vocales, aleatoria); **5+ letras** → la del medio, si no es vocal busca la vocal más cercana al centro. Si la sílaba no tiene vocales, fallback a consonante (la central o la última). Usa `ThreadLocalRandom` para las elecciones aleatorias (thread-safe en el hilo de audio). |
 | **Placeholder Canvas si no hay imagen** | Permite que la app funcione desde el primer `mvn javafx:run` sin que el usuario tenga que crear PNGs. Se ve color + forma de boca + texto. |
 | **Fallback: sin modelo Vosk → solo volumen** | La app no debe fallar si el modelo no está descargado. `VoskRecognizer.isModelAvailable()` decide. |
 | **ConcurrentLinkedQueue para visemes** | Productor (audio thread) y consumidor (FX thread) distintos. No se necesitan locks. `poll()` en el FX thread en cada frame = consumo ordenado. |
 | **EMA smoothing en VolumeAnalyzer** | Evita que el avatar "parpadee" con picos de audio. Alfa configurable (0..1). |
 | **AudioFrameProcessor como @FunctionalInterface** | Desacopla AudioCapture del reconocedor. AudioCapture no sabe si es Vosk, Kaldi, o nada. |
 | **`sampleRate` en AppConfig, no hardcoded** | Si el usuario cambia de modelo Vosk (p. ej. modelo a 8 kHz), solo cambia la config. |
-| **La imagen mostrada SIEMPRE corresponde a la letra de la sílaba reconocida** | `Viseme.fromLetter(c)` devuelve el viseme del grupo de esa letra; si la letra es del alfabeto pero **no** cae en ningún grupo asignado, el default es **`S`** (posición de boca intermedia que funciona para cualquier consonante no clasificada). Solo caracteres no-letter (puntuación, espacios, dígitos) devuelven `NEUTRAL`. Así "siempre se muestra la imagen de la letra": A→A, E→E, …, y cualquier consonante extra→S. |
+| **La imagen mostrada SIEMPRE corresponde a la letra de la sílaba reconocida** | `Viseme.fromLetter(c)` devuelve el viseme del grupo de esa letra; si la letra es del alfabeto pero **no** cae en ningún grupo asignado, el default es **`S`** (posición de boca intermedia que funciona para cualquier consonante no clasificada). Solo caracteres no-letter (puntuación, espacios, dígitos) devuelven `NEUTRAL`. Así "siempre se muestra la imagen de la letra": A→A, E→E, …, y cualquier consonante extra→S. **Nota:** la letra **Y** se agrupa con la vocal **I** (mismo viseme/imagen), no en el grupo S. |
 | **No se muestran visemes aleatorios cuando Vosk no reconoce palabra** | La UI (`PngVoiceApp.tick`) ya **no** usa el fallback aleatorio por volumen (`TALKING`/`pickTalkingViseme` eliminados). Solo consume visemes de la cola del reconocedor (`pollNextViseme()`). Si la cola está vacía (Vosk no ha identificado sílabas), **no se muestra ninguna imagen nueva**: se conserva la imagen actual (normalmente `NEUTRAL`). Las imágenes solo aparecen cuando hay sílabas identificadas en la cola. |
 | **La boca se anima SÍLABA A SÍLABA (no solo la última)** | Antes `tick()` drenaba toda la cola y conservaba **solo el último** viseme (las intermedias se descartaban en el mismo frame; la boca solo mostraba la última sílaba de cada palabra). Ahora `tick()` drena la cola del reconocedor hacia una **fila de reproducción** (`playbackQueue`, `ArrayDeque<Viseme>`) y avanza por ella mostrando **cada** sílaba al menos `syllableMinMs` ms antes de pasar a la siguiente. El default bajó de 150 a **80 ms** (~12 sílabas/s, más rápido que el habla natural) para que el cambio de imagen sea **fluido** y no se vea a "pulsos". Es **configurable** en `app.json` (`syllableMinMs`). Así "gobierno" → O → E → O se ve completo. |
 | **Las sílabas repetidas dan ilusión de sonido sostenido** | Al quitar el colapso `lastQueued` en `VoskRecognizer.updateVisemesFromSyllables()`, **todas** las sílabas se encolan (incluidas las repetidas). Como cada sílaba se muestra `SYLLABLE_MIN_MS` ms, las repetidas (p. ej. "bajaban" → A A A) **suman duración** en pantalla y producen la sensación de un sonido sostenido, en vez de colapsar a 1 único A. |
@@ -343,7 +346,7 @@ mvn clean package -Dskip.jpackage=true
 | `SyllableSplitterTest` (12 tests) | DominantViseme por apertura, split por sílabas, edge cases |
 | `ConfigLoaderTest` (5 tests) | Save/load round-trip, defaults, custom values |
 | `AvatarRendererTest` (6 tests) | Placeholder rendering, estado, viseme→nombre |
-| `VoskRecognizerTest` (9 tests) | `extractText`: parseo JSON→texto de Vosk (`text`/`partial`, vacíos, texto plano, JSON inválido) |
+| `VoskRecognizerTest` (31 tests) | `extractText`: parseo JSON→texto de Vosk + `visemeFromSyllable`: prioridad vocal dominante por longitud (1, 2, 3, 4, 5+ letras), casos con/ sin vocales, aleatorias |
 
 > **Logging (deduplicado):** `VoskRecognizer.acceptWaveForm()` loguea a nivel
 > **INFO** solo cuando el texto reconocido **cambia** (guard `lastLoggedText`).

@@ -53,12 +53,11 @@ public class AppConfig {
      * animarse <i>después</i> de haber sido dicha. Cuanto más bajo, más
      * fluida y reactiva se ve la boca.
      *
-     * <p>El default baja de 80 a <b>40 ms</b> (~25 sílabas/s), muy por debajo
-     * del ritmo del habla natural (~150 ms/sílaba), para que la secuencia de
-     * sílabas de una palabra se reproduzca casi al instante de reconocerse.
-     * A 60 fps un frame son ~16,7 ms, así que 40 ms ≈ 2 frames por sílaba:
-     * el cambio de imagen sigue siendo perceptible (no se "comprime" a 1 frame)
-     * pero la boca avanza mucho más rápido que con 50 ms.
+     * <p>El default es <b>60 ms</b> (~16.7 sílabas/s), por debajo del ritmo del
+     * habla natural (~150 ms/sílaba) pero lo bastante lento como para que cada
+     * forma de boca se perciba de forma natural (no "a pulsos"). A 60 fps un
+     * frame son ~16,7 ms, así que 60 ms ≈ 3.6 frames por sílaba: el cambio de
+     * imagen es suave y cada viseme se ve claramente.
      * Las sílabas repetidas (mismo viseme) siguen sumando duración, de modo
      * que se conserva la sensación de sonido sostenido.
      *
@@ -67,7 +66,7 @@ public class AppConfig {
      * de la UI. Si prefieres una boca menos veloz, sube el valor en
      * {@code app.json} (clave {@code syllableMinMs}).
      */
-    private long syllableMinMs = 25L;
+    private long syllableMinMs = 60L;
 
     /**
      * Umbral de volumen <b>normalizado (0..1)</b> a partir del cual el avatar

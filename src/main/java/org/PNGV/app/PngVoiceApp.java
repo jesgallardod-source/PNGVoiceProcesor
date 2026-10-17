@@ -87,17 +87,17 @@ public class PngVoiceApp extends javafx.application.Application {
      * "gobierno" → O → E → O) y las sílabas repetidas (p. ej. "bajaban" →
      * A A A) se suman en tiempo, dando la ilusión de un sonido sostenido.
      *
-     * <p>El default es <b>25 ms</b> (~40 sílabas/s), muy por debajo del ritmo
-     * del habla natural (~150 ms/sílaba), para que la secuencia de sílabas de
-     * una palabra se reproduzca casi al instante de reconocerse. A 60 fps un
-     * frame son ~16,7 ms, así que 25 ms ≈ 1.5 frames por sílaba: el cambio de
-     * imagen sigue siendo perceptible pero la boca avanza muy rápido.
+     * <p>El default es <b>60 ms</b> (~16.7 sílabas/s), por debajo del ritmo del
+     * habla natural (~150 ms/sílaba) pero lo bastante lento como para que cada
+     * forma de boca se perciba de forma natural (no "a pulsos"). A 60 fps un
+     * frame son ~16,7 ms, así que 60 ms ≈ 3.6 frames por sílaba: el cambio de
+     * imagen es suave y se ve cada viseme claramente.
      *
      * <p>Es el <b>default</b>; el valor efectivo se lee de la config
      * ({@code syllableMinMs}) al iniciar el micrófono y se guarda en el campo
      * de instancia {@link #syllableMinMs}.
      */
-    private static final long SYLLABLE_MIN_MS = 25;
+    private static final long SYLLABLE_MIN_MS = 60;
 
     /**
      * Visemes (grupos de letras) que se muestran como imágenes propias.

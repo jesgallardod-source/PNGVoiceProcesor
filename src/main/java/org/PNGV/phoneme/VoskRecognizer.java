@@ -412,14 +412,28 @@ public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
     }
 
     /**
-     * Devuelve el viseme correspondiente a una sílaba según la regla:
+     * Devuelve el viseme correspondiente a una sílaba aplicando <b>prioridad
+     * a la vocal dominante</b>.
+     *
+     * <p>Reglas por longitud de la sílaba:
      * <ul>
-     *   <li>1 letra        → esa letra</li>
-     *   <li>2 letras       → la <b>última</b></li>
-     *   <li>3+ letras      → la <b>central</b> (índice {@code len/2})</li>
+     *   <li><b>1 letra</b> → esa misma letra.</li>
+     *   <li><b>2 letras</b> → la vocal (si hay una); si son 2 vocales, la
+     *       <b>última</b>; si no hay vocales, la última (fallback).</li>
+     *   <li><b>3 letras</b> → la del <b>medio</b> (índice 1); si el medio no
+     *       es vocal pero hay otra vocal, esa vocal; si hay 2 vocales no
+     *       centrales, se elige una <b>aleatoriamente</b>.</li>
+     *   <li><b>4 letras</b> → entre las 2 del <b>medio</b> (índices 1 y 2):
+     *       se prefiere la vocal; si ambas son vocales, se elige una
+     *       <b>aleatoriamente</b>; si ninguna es vocal, se busca una vocal
+     *       en el resto de la sílaba; si no hay, aleatoria entre las
+     *       centrales.</li>
+     *   <li><b>5+ letras</b> → la del <b>medio</b> (índice {@code len/2});
+     *       si no es vocal, se busca la vocal más cercana al centro; si no
+     *       hay vocales, la central.</li>
      * </ul>
      *
-     * @param syllable sílaba (p. ej. "pro", "ma", "ho")
+     * @param syllable sílaba (p. ej. "pro", "ma", "ho", "cris")
      * @return viseme, o {@link Viseme#NEUTRAL} si no se puede determinar
      */
     static Viseme visemeFromSyllable(String syllable) {
@@ -428,14 +442,112 @@ public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
         }
         String s = syllable.toLowerCase();
         int len = s.length();
+
+        // 1 letra: esa misma letra
         if (len == 1) {
             return Viseme.fromLetter(s.charAt(0));
         }
+
+        // 2 letras: la vocal; si dos vocales, la última
         if (len == 2) {
-            return Viseme.fromLetter(s.charAt(1));   // última letra
+            boolean v0 = esVocal(s.charAt(0));
+            boolean v1 = esVocal(s.charAt(1));
+            if (v0 && v1) {
+                return Viseme.fromLetter(s.charAt(1)); // 2 vocales → la última
+            }
+            if (v1) {
+                return Viseme.fromLetter(s.charAt(1)); // vocal en posición 1
+            }
+            if (v0) {
+                return Viseme.fromLetter(s.charAt(0)); // vocal en posición 0
+            }
+            return Viseme.fromLetter(s.charAt(1));     // sin vocales → última (fallback)
         }
-        // 3+ letras: letra central
-        return Viseme.fromLetter(s.charAt(len / 2));
+
+        // 3 letras: la del medio (índice 1), con prioridad a vocal
+        if (len == 3) {
+            char mid = s.charAt(1);
+            if (esVocal(mid)) {
+                return Viseme.fromLetter(mid);
+            }
+            // El medio no es vocal: buscar vocal en las otras posiciones
+            boolean v0 = esVocal(s.charAt(0));
+            boolean v2 = esVocal(s.charAt(2));
+            if (v0 && v2) {
+                return Viseme.fromLetter(aleatorio(s.charAt(0), s.charAt(2)));
+            }
+            if (v0) {
+                return Viseme.fromLetter(s.charAt(0));
+            }
+            if (v2) {
+                return Viseme.fromLetter(s.charAt(2));
+            }
+            // Sin vocales: la del medio (fallback)
+            return Viseme.fromLetter(mid);
+        }
+
+        // 4 letras: entre las 2 del medio (índices 1 y 2), preferir vocal
+        if (len == 4) {
+            char a = s.charAt(1);
+            char b = s.charAt(2);
+            boolean va = esVocal(a);
+            boolean vb = esVocal(b);
+            if (va && vb) {
+                return Viseme.fromLetter(aleatorio(a, b)); // 2 vocales centrales → aleatoria
+            }
+            if (va) {
+                return Viseme.fromLetter(a); // vocal en índice 1
+            }
+            if (vb) {
+                return Viseme.fromLetter(b); // vocal en índice 2
+            }
+            // Ninguna vocal en el centro: buscar en posiciones 0 y 3
+            boolean v0 = esVocal(s.charAt(0));
+            boolean v3 = esVocal(s.charAt(3));
+            if (v0 && v3) {
+                return Viseme.fromLetter(aleatorio(s.charAt(0), s.charAt(3)));
+            }
+            if (v0) {
+                return Viseme.fromLetter(s.charAt(0));
+            }
+            if (v3) {
+                return Viseme.fromLetter(s.charAt(3));
+            }
+            // Sin vocales: aleatoria entre las centrales (fallback)
+            return Viseme.fromLetter(aleatorio(a, b));
+        }
+
+        // 5+ letras: la del medio, con prioridad a vocal
+        int mid = len / 2;
+        if (esVocal(s.charAt(mid))) {
+            return Viseme.fromLetter(s.charAt(mid));
+        }
+        // Buscar la vocal más cercana al centro (expande hacia ambos lados)
+        for (int offset = 1; offset <= mid; offset++) {
+            char left = s.charAt(mid - offset);
+            char right = s.charAt(mid + offset);
+            boolean vl = esVocal(left);
+            boolean vr = esVocal(right);
+            if (vl && vr) {
+                return Viseme.fromLetter(aleatorio(left, right));
+            }
+            if (vl) {
+                return Viseme.fromLetter(left);
+            }
+            if (vr) {
+                return Viseme.fromLetter(right);
+            }
+        }
+        // Sin vocales: la del medio (fallback)
+        return Viseme.fromLetter(s.charAt(mid));
+    }
+
+    /**
+     * Elige aleatoriamente entre dos caracteres (50/50).
+     * Usa {@link ThreadLocalRandom} para evitar contención en el hilo de audio.
+     */
+    private static char aleatorio(char a, char b) {
+        return java.util.concurrent.ThreadLocalRandom.current().nextBoolean() ? a : b;
     }
 
     @Override

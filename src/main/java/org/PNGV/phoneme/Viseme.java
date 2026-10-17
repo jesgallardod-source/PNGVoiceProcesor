@@ -17,13 +17,13 @@ import java.util.Map;
  *   <li>{@link #NEUTRAL} → boca cerrada, reposo (silencio)</li>
  *   <li>{@link #A}       → boca abierta amplia            (a, á)</li>
  *   <li>{@link #E}       → boca media, labios extendidos  (e, é)</li>
- *   <li>{@link #I}       → boca cerrada, sonrisa          (i, í)</li>
+ *   <li>{@link #I}       → boca cerrada, sonrisa          (i, í, y)</li>
  *   <li>{@link #O}       → boca redondeada media          (o, ó)</li>
  *   <li>{@link #U}       → boca muy redondeada            (u, ú)</li>
  *   <li>{@link #BMP}     → labios cerrados                (b, m, p)</li>
  *   <li>{@link #FV}      → diente sobre labio inferior    (f, v)</li>
  *   <li>{@link #L}       → punta de lengua                (l, r)</li>
- *   <li>{@link #S}       → boca estrecha / intermedia     (s, c, d, g, k, n, t, x, y, z, h, q, w)</li>
+ *   <li>{@link #S}       → boca estrecha / intermedia     (s, c, d, g, k, n, t, x, z, h, q, w)</li>
  * </ul>
  *
  * <p><b>Nota sobre consonantes agrupadas:</b> en 2D las consonantes del grupo
@@ -39,7 +39,7 @@ public enum Viseme {
     A,
     /** Boca media, labios extendidos. Vocal E. */
     E,
-    /** Boca cerrada, sonrisa. Vocal I. */
+    /** Boca cerrada, sonrisa. Vocal I y la letra Y. */
     I,
     /** Boca redondeada media. Vocal O. */
     O,
@@ -51,7 +51,7 @@ public enum Viseme {
     FV,
     /** Punta de lengua visible. L, R. */
     L,
-    /** Boca estrecha / intermedia. S, C, D, G, K, N, T, X, Y, Z, H, Q, W. */
+    /** Boca estrecha / intermedia. S, C, D, G, K, N, T, X, Z, H, Q, W. */
     S,
     /**
      * Grito (variante 1): expresión de boca a gritar. <b>No</b> corresponde a
@@ -76,14 +76,14 @@ public enum Viseme {
         // Vocales (cada una con su propia forma de boca)
         assign(map, A, "aá");
         assign(map, E, "eé");
-        assign(map, I, "ií");
+        assign(map, I, "iíy");
         assign(map, O, "oó");
         assign(map, U, "uú");
         // Grupos de consonantes
         assign(map, BMP, "bmp");
         assign(map, FV, "fv");
         assign(map, L, "lr");
-        assign(map, S, "scdgkntxyzhqw");
+        assign(map, S, "scdgkntxzhqw");
         return map;
     }
 
