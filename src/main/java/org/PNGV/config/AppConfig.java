@@ -101,7 +101,7 @@ public class AppConfig {
      * fondo, así que el silencio real (sin voz) sí cierra la boca, pero las
      * micropausas dentro de una palabra no.
      */
-    private double mouthCloseThreshold = 0.02;
+    private double mouthCloseThreshold = 0.25;
 
     /**
      * Tiempo (ms) que la boca se mantiene <b>abierta</b> tras la última

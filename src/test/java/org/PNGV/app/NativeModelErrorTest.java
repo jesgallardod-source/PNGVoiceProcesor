@@ -7,12 +7,16 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Pruebas de {@link PngVoiceApp#buildNativeModelErrorMessage(Throwable)}.
+ * Pruebas de {@link NativeModelErrorBuilder#build(Throwable)}.
  *
- * <p>El método es estático y puro (no necesita JavaFX), por lo que puede
- * verificarse sin arrancar la UI. Asegura que el mensaje de error que se
- * muestra al usuario distingue el caso de {@link UnsatisfiedLinkError} del
- * resto de errores y que incluye el detalle de la causa cuando existe.
+ * <p>La lógica de construcción del mensaje está en una clase independiente
+ * de {@link PngVoiceApp} para poder probarse sin cargar JavaFX (la clase
+ * principal extiende {@code javafx.application.Application}, lo que impide
+ * instanciarla en un entorno de test sin display).
+ *
+ * <p>Asegura que el mensaje de error que se muestra al usuario distingue el
+ * caso de {@link UnsatisfiedLinkError} del resto de errores y que incluye
+ * el detalle de la causa cuando existe.
  */
 class NativeModelErrorTest {
 
@@ -22,7 +26,7 @@ class NativeModelErrorTest {
         UnsatisfiedLinkError cause =
                 new UnsatisfiedLinkError("no vosk in java.library.path");
 
-        String msg = PngVoiceApp.buildNativeModelErrorMessage(cause);
+        String msg = NativeModelErrorBuilder.build(cause);
 
         assertTrue(msg.contains("librería nativa"),
                 "Debe mencionar que falta la librería nativa");
@@ -38,7 +42,7 @@ class NativeModelErrorTest {
         IllegalStateException cause =
                 new IllegalStateException("modelo corrupto");
 
-        String msg = PngVoiceApp.buildNativeModelErrorMessage(cause);
+        String msg = NativeModelErrorBuilder.build(cause);
 
         assertTrue(msg.contains("modelo de reconocimiento"),
                 "Debe indicar que falló la carga del modelo");
@@ -53,7 +57,7 @@ class NativeModelErrorTest {
     void nullMessage_doesNotThrow() {
         RuntimeException cause = new RuntimeException();
 
-        String msg = PngVoiceApp.buildNativeModelErrorMessage(cause);
+        String msg = NativeModelErrorBuilder.build(cause);
 
         assertTrue(msg.contains("modelo de reconocimiento"),
                 "Debe usar el mensaje genérico");
@@ -64,7 +68,7 @@ class NativeModelErrorTest {
     @Test
     @DisplayName("Causa null → mensaje vacío, sin excepciones")
     void nullCause_returnsEmptyMessage() {
-        String msg = PngVoiceApp.buildNativeModelErrorMessage(null);
+        String msg = NativeModelErrorBuilder.build(null);
         assertTrue(msg.isEmpty(), "Sin causa debe devolver un mensaje vacío");
     }
 }

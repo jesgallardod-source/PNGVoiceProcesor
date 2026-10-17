@@ -189,13 +189,21 @@ public class PngVoiceApp extends javafx.application.Application {
      *
      * <p><b>Se abre</b> cuando el volumen normalizado cruza
      * {@link #mouthOpenThreshold} (reacción instantánea al empezar a hablar).
-     * <b>Se cierra</b> cuando durante {@link #mouthReleaseMs} ms no llega
-     * ninguna sílaba nueva de Vosk (ver {@link #lastMouthActivityNanos}).
      *
-     * <p>El volumen <b>no</b> la mantiene abierta: si el micrófono tiene ruido
-     * de fondo por encima del umbral, la boca se abriría/cerraría
-     * intermitentemente pero <b>no</b> se quedaría "pegada" mostrando la
-     * última sílaba (bug de "no vuelve a NEUTRAL en silencio").
+     * <p><b>Se mantiene abierta</b> mientras se cumpla <b>cualquiera</b> de:
+     * <ul>
+     *   <li>Hay actividad reciente: sílaba nueva de Vosk dentro de
+     *       {@link #mouthReleaseMs} ms.</li>
+     *   <li>El volumen sigue por encima de {@link #mouthCloseThreshold}
+     *       (histéresis: open=0.05, close=0.02). Esto cubre el caso de
+     *       <b>sonido sostenido</b>: una nota de canción, un grito prolongado
+     *       o una vocal mantenida ("Aaaaaa"). La imagen se mantiene visible
+     *       durante todo el tiempo que el usuario siga haciendo sonido.</li>
+     * </ul>
+     *
+     * <p><b>Se cierra</b> cuando NO hay actividad reciente <b>y</b> el
+     * volumen cae por debajo de {@link #mouthCloseThreshold}. El ruido de
+     * fondo (que normalmente ronda 0.01-0.02) cierra la boca correctamente.
      */
     private boolean mouthOpen = false;
     /**
@@ -206,12 +214,31 @@ public class PngVoiceApp extends javafx.application.Application {
      * ese tiempo no se refresca, la boca se cierra → NEUTRAL.
      */
     private long lastMouthActivityNanos = 0L;
+    /**
+     * Momento (ns, AnimationTimer) en que llegó la <b>última sílaba real</b>
+     * de Vosk a la fila de reproducción. A diferencia de
+     * {@link #lastMouthActivityNanos} (que también se refresca al abrir la boca
+     * por volumen), este solo avanza cuando hay <b>habla reconocida</b>.
+     * Se usa para mantener la imagen de la última sílaba un breve hold y, si
+     * la boca sigue abierta por un sonido sostenido sin palabra reconocida,
+     * mostrar la forma genérica de boca abierta (A) en vez de la sílaba vieja.
+     */
+    private long lastSyllableNanos = 0L;
     /** Umbral (0..1) para abrir la boca. Se refresca desde la config. */
     private double mouthOpenThreshold = 0.05;
     /** Umbral (0..1) para cerrar la boca (histéresis). Se refresca desde la config. */
-    private double mouthCloseThreshold = 0.02;
+    private double mouthCloseThreshold = 0.25;
     /** Tiempo (ms) que la boca se mantiene abierta tras la última actividad. Se refresca. */
     private long mouthReleaseMs = 160L;
+    /**
+     * Tiempo (ms) que se mantiene la <b>última sílaba reconocida</b> en pantalla
+     * mientras la boca sigue abierta (por sonido sostenido) pero ya no llegan
+     * sílabas nuevas. Pasado ese hold, si la boca sigue abierta por un sonido
+     * sin palabra reconocida, se muestra la forma genérica de boca abierta (A)
+     * en vez de la sílaba vieja. Default 250 ms (cubre las pausas típicas entre
+     * sílabas/palabras ~80-160 ms).
+     */
+    private long lastSyllableHoldMs = 250L;
     /** Último viseme reflejado en la etiqueta "Viseme:" (evita setText por frame). */
     private Viseme lastVisemeLabel = null;
     /** Marca (ns, AnimationTimer) de cuándo se fijó la imagen visible actual. */
@@ -499,14 +526,15 @@ public class PngVoiceApp extends javafx.application.Application {
     /**
      * Actualiza UI con el estado de volumen más reciente.
      *
-     * <p>Estrategia <b>boca por volumen + sílabas de refino</b>:
+     * <p>Estrategia <b>boca por volumen + sílabas de refino + sonido sostenido</b>:
      * <ol>
      *   <li>La boca se <b>abre</b> cuando el volumen normalizado cruza
      *       {@link #mouthOpenThreshold} (reacción instantánea al hablar).
-     *       Se <b>cierra</b> cuando durante {@link #mouthReleaseMs} ms no
-     *       llega ninguna sílaba nueva de Vosk. El volumen <b>no</b> la
-     *       mantiene abierta: así el ruido de fondo (que no produce
-     *       sílabas) no impide que el avatar vuelva a NEUTRAL en silencio.</li>
+     *       Se <b>mantiene abierta</b> mientras haya actividad reciente
+     *       (sílaba nueva) <b>o</b> mientras el volumen siga por encima de
+     *       {@link #mouthCloseThreshold} (histéresis, sonido sostenido).
+     *       Se <b>cierra</b> cuando no hay actividad reciente <b>y</b> el
+     *       volumen cae por debajo del umbral de cierre.</li>
      *   <li>Se drena la cola del reconocedor hacia una <b>fila de
      *       reproducción</b> ({@link #playbackQueue}). La fila se avanza a su
      *       ritmo ({@link #syllableMinMs}) <b>siempre</b>, aunque la boca
@@ -519,6 +547,12 @@ public class PngVoiceApp extends javafx.application.Application {
      *       está abierta, se muestra la imagen de grito por encima del
      *       viseme normal.</li>
      * </ol>
+     *
+     * <p><b>Comportamiento con sonidos sostenidos:</b> cuando el usuario
+     * sostiene una vocal (p. ej. "aaaaa" o una nota de canción), la imagen
+     * de la letra se mantiene visible durante todo el tiempo que el sonido
+     * continúe por encima del umbral, en lugar de cerrarse tras 160 ms y
+     * reaparecer solo al terminar (cuando Vosk emite el resultado final).
      *
      * @param level      nivel de volumen 0-3 (no se usa para la boca, solo el
      *                   grito usa el nivel normalizado)
@@ -533,17 +567,17 @@ public class PngVoiceApp extends javafx.application.Application {
         // Vosk confirme la primera palabra (~200–400 ms). Esto da la sensación
         // de reacción inmediata al empezar a hablar.
         //
-        // <b>Mantener:</b> SOLO la llegada de sílabas nuevas (Vosk) mantiene la
-        // boca abierta. El volumen <b>NO</b> la mantiene: si el micrófono tiene
-        // ruido de fondo por encima de {@code mouthOpenThreshold} (muy común,
-        // ~-44 dBFS), el volumen se mantendría alto "eternamente" y la boca
-        // nunca cerraría → la imagen quedaba pegada en la última sílaba y
-        // <b>no volvía a NEUTRAL</b> en silencio (bug reportado).
+        // <b>Mantener:</b> la boca se mantiene abierta si hay actividad reciente
+        // (sílaba nueva de Vosk dentro de {@link #mouthReleaseMs}) <b>o</b> si
+        // el volumen sigue por encima de {@link #mouthCloseThreshold}
+        // (histéresis: open=0.05, close=0.02). Esto cubre el caso de
+        // <b>sonido sostenido</b>: una nota de canción, un grito prolongado
+        // o una vocal mantenida ("Aaaaaa").
         //
-        // <b>Cerrar:</b> si durante {@link #mouthReleaseMs} ms no llega ninguna
-        // sílaba nueva, la boca se cierra → {@link Viseme#NEUTRAL}. Las sílabas
-        // solo llegan cuando hay voz real reconocida por Vosk; el ruido de fondo
-        // no produce sílabas, así que la boca se cierra correctamente en silencio.
+        // <b>Cerrar:</b> la boca se cierra cuando NO hay actividad reciente
+        // <b>y</b> el volumen cae por debajo de {@link #mouthCloseThreshold}.
+        // El ruido de fondo (que normalmente ronda 0.01-0.02) cierra la boca
+        // correctamente porque queda bajo el umbral de cierre.
         if (!mouthOpen && normalized >= mouthOpenThreshold) {
             // Primer disparo: abrir la boca al instante por volumen.
             mouthOpen = true;
@@ -555,11 +589,33 @@ public class PngVoiceApp extends javafx.application.Application {
                 visibleImageStartNanos = now;
             }
         } else if (mouthOpen) {
-            // Mantener abierta solo si hay actividad real (sílabas nuevas, que
-            // el paso 2 refresca en lastMouthActivityNanos). Si durante
-            // mouthReleaseMs no llega ninguna sílaba, cerrar → NEUTRAL.
-            if (elapsedMs(now, lastMouthActivityNanos) >= mouthReleaseMs) {
+            // Mantener abierta si se cumple <b>cualquiera</b> de:
+            //   a) Hay actividad reciente (sílaba nueva dentro de mouthReleaseMs), O
+            //   b) El volumen sigue por encima del umbral de <b>cierre</b>
+            //      (histéresis: open=0.05, close=0.02). Esto cubre el caso de
+            //      <b>sonido sostenido</b>: una nota de canción, un grito
+            //      prolongado o una vocal mantenida ("Aaaaaa"). La boca no se
+            //      cierra mientras el usuario siga haciendo sonido.
+            //
+            // <p>La histéresis (open > close) evita el "parpadeo" entre abierto
+            // y cerrado cuando el volumen oscila cerca del umbral. El ruido de
+            // fondo por debajo de {@code mouthCloseThreshold} (0.02) cierra la
+            // boca correctamente.
+            boolean recentActivity = elapsedMs(now, lastMouthActivityNanos) < mouthReleaseMs;
+            // Para mantener la boca abierta por VOLUMEN debe haber un sonido
+            // REAL sostenido (>= umbral de APERTURA, 0.05). Antes se usaba el
+            // umbral de CIERRE (0.02), pero el ruido de fondo ambiental ronda
+            // 0.01-0.02, así que la banda de histéresis (0.02-0.05) sostenía
+            // la boca abierta indefinidamente y el avatar se quedaba pegado a
+            // la imagen de la última sílaba (bug: no volvía a boca cerrada en
+            // silencio). Ahora el ruido de la banda de histéresis NO mantiene
+            // la boca abierta; solo un sonido real lo hace.
+            boolean volumeStillHigh = normalized >= mouthOpenThreshold;
+            if (!recentActivity && !volumeStillHigh) {
+                // La boca se cierra: reseteamos la última sílaba para que no se
+                // siga mostrando una imagen obsoleta en el próximo turno.
                 mouthOpen = false;
+                lastSpoken = Viseme.NEUTRAL;
             }
         }
 
@@ -577,6 +633,9 @@ public class PngVoiceApp extends javafx.application.Application {
             // Una sílaba nueva también cuenta como "actividad" de la boca:
             // mantiene la boca abierta aunque el volumen baje momentáneamente.
             lastMouthActivityNanos = now;
+            // Marca el momento de la última sílaba REAL reconocida (usada para
+            // el hold de "mantener la última sílaba" en el paso 4).
+            lastSyllableNanos = now;
             if (queueWasEmpty) {
                 // La cola estaba vacía y ahora tiene una sílaba nueva:
                 // la primera sílaba debe tener sus syllableMinMs completos
@@ -618,17 +677,36 @@ public class PngVoiceApp extends javafx.application.Application {
         //  1. Cola no vacía → primera sílaba REAL reconocida (siempre se muestra,
         //     aunque la boca esté cerrada: evita que una sílaba corta como "i"
         //     se consuma en el paso 3 sin haberse mostrado — bug de la letra I).
-        //  2. Boca abierta + cola vacía → la última sílaba hablada (o NEUTRAL
-        //     si nunca habló), para que la boca no "parpadee" esperando a que
-        //     Vosk confirme la siguiente palabra.
-        //  3. Boca cerrada + cola vacía → NEUTRAL.
+        //  2. Boca abierta + cola vacía + hay viseme reconocido → la última sílaba
+        //     hablada, para que la boca no "parpadee" esperando a que Vosk confirme
+        //     la siguiente palabra.
+        //  3. Boca abierta + cola vacía + sin viseme reconocido → A (boca abierta).
+        //     Esto cubre el caso de sonido sostenido (nota de canción, grito,
+        //     "Aaaaaa"...) donde Vosk aún no ha reconocido una palabra pero el
+        //     usuario está haciendo sonido. Se muestra A (boca abierta) en lugar
+        //     de NEUTRAL, que es la forma de boca más natural para un sonido
+        //     sostenido.
+        //  4. Boca cerrada + cola vacía → NEUTRAL.
         Viseme visemeToShow;
         if (!playbackQueue.isEmpty()) {
             visemeToShow = playbackQueue.peekFirst();
         } else if (!mouthOpen) {
             visemeToShow = Viseme.NEUTRAL;
-        } else {
+        } else if (lastSpoken != Viseme.NEUTRAL
+                && elapsedMs(now, lastSyllableNanos) < lastSyllableHoldMs) {
+            // Boca abierta + la última sílaba reconocida es RECIENTE (dentro
+            // del hold): mostrarla. Así la boca sigue mostrando la letra
+            // correcta mientras la palabra se sigue pronunciando.
             visemeToShow = lastSpoken;
+        } else {
+            // Boca abierta pero sin sílaba reciente: el usuario está haciendo
+            // un sonido sostenido (nota de canción, grito, "Aaaaaa"...) y
+            // Vosk aún no ha reconocido una palabra nueva (o la última sílaba
+            // ya tiene más del hold de antigüedad). En lugar de mostrar la
+            // sílaba VIEJA pegada, mostramos A (boca abierta), la forma más
+            // natural para un sonido sostenido. Cuando Vosk produzca el
+            // resultado, se mostrará la letra correcta.
+            visemeToShow = Viseme.A;
         }
         // Refrescar lastSpoken solo con visemes reales (no NEUTRAL), para que
         // en silencio la boca pueda volver a mostrar la última sílaba hablada
@@ -975,6 +1053,7 @@ public class PngVoiceApp extends javafx.application.Application {
             // Reiniciar el estado de la boca al arrancar el micrófono.
             mouthOpen = false;
             lastMouthActivityNanos = 0L;
+            lastSyllableNanos = 0L;
             lastSpoken = Viseme.NEUTRAL;
             playbackQueue.clear();
             visibleImageStartNanos = 0L;
@@ -1036,13 +1115,14 @@ public class PngVoiceApp extends javafx.application.Application {
      * JNI ausente/incompatible) u otra excepción — y le indica que la app
      * continuará en modo "fallback por volumen".
      *
-     * <p>El texto del diálogo se construye con {@link #buildNativeModelErrorMessage(Throwable)}
-     * para que sea fácil de testear sin necesidad de JavaFX.
+     * <p>El texto del diálogo se construye con
+     * {@link NativeModelErrorBuilder#build(Throwable)} (clase independiente
+     * sin dependencias de JavaFX, testeable sin display).
      *
      * @param cause error original capturado al cargar el modelo
      */
     private void showNativeModelError(Throwable cause) {
-        String message = buildNativeModelErrorMessage(cause);
+        String message = NativeModelErrorBuilder.build(cause);
         LOG.warn("Mostrando diálogo de error de carga de modelo: {}", message);
         try {
             Alert alert = new Alert(Alert.AlertType.ERROR, message, ButtonType.OK);
@@ -1057,34 +1137,6 @@ public class PngVoiceApp extends javafx.application.Application {
             // si falla (p. ej. sin toolkit JavaFX disponible), solo se loguea.
             LOG.error("No se pudo mostrar el diálogo de error del modelo", e);
         }
-    }
-
-    /**
-     * Construye el mensaje legible que se muestra al usuario cuando el modelo
-     * nativo no carga. Distingue el caso concreto de {@link UnsatisfiedLinkError}
-     * (binario JNI incompatible/ausente) del resto de errores.
-     *
-     * <p>Es un método {@code static} y {@code public} para poder probarlo sin
-     * iniciar JavaFX.
-     *
-     * @param cause error original (puede ser {@code null})
-     * @return mensaje de error en español, listo para mostrarse
-     */
-    public static String buildNativeModelErrorMessage(Throwable cause) {
-        StringBuilder sb = new StringBuilder();
-        if (cause instanceof UnsatisfiedLinkError) {
-            sb.append("No se encontró una librería nativa compatible para el sistema operativo "
-                    + "y arquitectura actuales.\n\n")
-              .append("Verifica que:\n")
-              .append("  • La librería nativa de Vosk exista para tu plataforma (OS/CPU).\n")
-              .append("  • Estés ejecutando la versión correcta del JAR (fat-jar con dependencias).\n");
-        } else if (cause != null) {
-            sb.append("Ocurrió un error al cargar el modelo de reconocimiento de voz.\n\n");
-        }
-        if (cause != null && cause.getMessage() != null) {
-            sb.append("Detalle: ").append(cause.getMessage());
-        }
-        return sb.toString();
     }
 
     private void stopMic() {
@@ -1104,6 +1156,7 @@ public class PngVoiceApp extends javafx.application.Application {
         // Reiniciar el estado de la boca por volumen.
         mouthOpen = false;
         lastMouthActivityNanos = 0L;
+        lastSyllableNanos = 0L;
         lastSpoken = Viseme.NEUTRAL;
         playbackQueue.clear();
         visibleImageStartNanos = 0L;
