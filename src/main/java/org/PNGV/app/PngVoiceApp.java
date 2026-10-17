@@ -578,6 +578,12 @@ public class PngVoiceApp extends javafx.application.Application {
             // mantiene la boca abierta aunque el volumen baje momentáneamente.
             lastMouthActivityNanos = now;
             if (queueWasEmpty) {
+                // La cola estaba vacía y ahora tiene una sílaba nueva:
+                // la primera sílaba debe tener sus syllableMinMs completos
+                // antes de avanzar a la siguiente. Sin este reset, el
+                // timestamp de la última sílaba vieja (que hace cientos de
+                // ms que terminó) haría que el paso 3 consumiera la sílaba
+                // nueva en el mismo frame sin mostrarla (bug de I/Y).
                 visibleImageStartNanos = now;
             }
             LOG.info("[UI] DRAIN → {} sílaba(s) en la fila, primera: {}",
@@ -586,11 +592,19 @@ public class PngVoiceApp extends javafx.application.Application {
 
         // ---- 3) Avanzar la fila de reproducción SIEMPRE ----
         //
-        // La fila se drena a su ritmo ({@code syllableMinMs}) <b>independiente</b>
+        // La fila se avanza a su ritmo ({@code syllableMinMs}) <b>independiente</b>
         // del estado de la boca: si la boca está cerrada y llegan sílabas,
         // se avanzan igualmente para no acumular "visemes obsoletos" que luego
         // se mostrarían de golpe (tartamudeo). El estado de la boca solo
         // decide <b>qué</b> se muestra (paso 4), no <b>cuándo</b> se avanza.
+        //
+        // <b>Clave para el bug de I/Y:</b> el reloj {@code visibleImageStartNanos}
+        // se resetea SOLO en el paso 2 (al entrar una sílaba en cola vacía) o
+        // aquí (al avanzar a la siguiente). Así la sílaba actual tiene sus
+        // {@code syllableMinMs} completos antes de que {@code pollFirst()} la
+        // retire. Antes se reseteaba también al abrir la boca (paso 1), lo que
+        // hacía que el paso 3 consumiera la primera sílaba del siguiente frame
+        // sin haberla mostrado (~16 ms, invisible).
         if (!playbackQueue.isEmpty()) {
             if (elapsedMs(now, visibleImageStartNanos) >= syllableMinMs) {
                 playbackQueue.pollFirst();
@@ -601,16 +615,18 @@ public class PngVoiceApp extends javafx.application.Application {
         // ---- 4) Determinar el viseme a mostrar ----
         //
         // Prioridad:
-        //  1. Boca cerrada → NEUTRAL (el avatar no "habla").
-        //  2. Boca abierta + cola no vacía → primera sílaba de la cola.
-        //  3. Boca abierta + cola vacía → la última sílaba hablada (o
-        //     NEUTRAL si nunca habló), de modo que la boca no "parpadee"
-        //     esperando a que Vosk confirme la siguiente palabra.
+        //  1. Cola no vacía → primera sílaba REAL reconocida (siempre se muestra,
+        //     aunque la boca esté cerrada: evita que una sílaba corta como "i"
+        //     se consuma en el paso 3 sin haberse mostrado — bug de la letra I).
+        //  2. Boca abierta + cola vacía → la última sílaba hablada (o NEUTRAL
+        //     si nunca habló), para que la boca no "parpadee" esperando a que
+        //     Vosk confirme la siguiente palabra.
+        //  3. Boca cerrada + cola vacía → NEUTRAL.
         Viseme visemeToShow;
-        if (!mouthOpen) {
-            visemeToShow = Viseme.NEUTRAL;
-        } else if (!playbackQueue.isEmpty()) {
+        if (!playbackQueue.isEmpty()) {
             visemeToShow = playbackQueue.peekFirst();
+        } else if (!mouthOpen) {
+            visemeToShow = Viseme.NEUTRAL;
         } else {
             visemeToShow = lastSpoken;
         }

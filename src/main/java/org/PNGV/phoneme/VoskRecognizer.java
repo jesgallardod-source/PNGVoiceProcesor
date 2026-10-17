@@ -672,7 +672,10 @@ public class VoskRecognizer implements PhonemeRecognizer, AudioFrameProcessor {
     }
 
     private static boolean esVocal(char c) {
-        return "aeiouáéíóúü".indexOf(c) != -1;
+        // Incluye la 'y': en español funciona como vocal (conjunción "y",
+        // "yo", "ya", "ayer"). Sin ella, la palabra "y" no generaba ninguna
+        // sílaba (bug: la imagen de la letra I/Y no se mostraba al decir "y").
+        return "aeiouyáéíóúü".indexOf(c) != -1;
     }
 
     private static boolean esVocalFuerte(char c) {
